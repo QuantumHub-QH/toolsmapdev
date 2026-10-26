@@ -179,13 +179,21 @@ export default function Home() {
 
   // Load live assets from backend API + instant sync
   useEffect(() => {
+    const deletedIds: string[] = (() => {
+      try {
+        return JSON.parse(localStorage.getItem('mapdev_deleted_ids') || '[]');
+      } catch {
+        return [];
+      }
+    })();
+
     // 1. Instant load from local storage if available
     try {
       const local = localStorage.getItem('mapdev_saved_products');
       if (local) {
         const parsed = JSON.parse(local);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          setAssetsList(parsed);
+          setAssetsList(parsed.filter((a: Asset) => !deletedIds.includes(a.id)));
         }
       }
     } catch (e) {}
@@ -196,10 +204,9 @@ export default function Home() {
         const res = await fetch('/api/assets?t=' + Date.now());
         const json = await res.json();
         if (json.success && Array.isArray(json.data)) {
-          if (json.data.length > 0) {
-            setAssetsList(json.data);
-            localStorage.setItem('mapdev_saved_products', JSON.stringify(json.data));
-          }
+          const cleanData = json.data.filter((a: Asset) => !deletedIds.includes(a.id));
+          setAssetsList(cleanData);
+          localStorage.setItem('mapdev_saved_products', JSON.stringify(cleanData));
         }
       } catch (err) {
         console.error('Failed to fetch live assets:', err);

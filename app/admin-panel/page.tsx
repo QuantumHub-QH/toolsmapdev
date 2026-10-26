@@ -161,15 +161,17 @@ export default function AdminPanelPage() {
   const fetchProducts = async () => {
     setLoading(true);
     try {
+      const deletedIds: string[] = JSON.parse(localStorage.getItem('mapdev_deleted_ids') || '[]');
+
       // 1. Check local cache first
       let localProducts: Asset[] = [];
       const local = localStorage.getItem('mapdev_saved_products');
       if (local) {
         try {
           const parsed = JSON.parse(local);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            localProducts = parsed;
-            setProducts(parsed);
+          if (Array.isArray(parsed)) {
+            localProducts = parsed.filter((p: Asset) => !deletedIds.includes(p.id));
+            setProducts(localProducts);
           }
         } catch (e) {}
       }
@@ -178,19 +180,9 @@ export default function AdminPanelPage() {
       const res = await fetch('/api/admin-panel/products?t=' + Date.now());
       const data = await res.json();
       if (data.success && Array.isArray(data.data)) {
-        if (data.data.length > 0) {
-          setProducts(data.data);
-          localStorage.setItem('mapdev_saved_products', JSON.stringify(data.data));
-        } else if (localProducts.length > 0) {
-          // If server returned empty but local has products, restore local products to server!
-          for (const item of localProducts) {
-            await fetch('/api/admin-panel/products', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ product: item }),
-            });
-          }
-        }
+        const cleanServerData = data.data.filter((p: Asset) => !deletedIds.includes(p.id));
+        setProducts(cleanServerData);
+        localStorage.setItem('mapdev_saved_products', JSON.stringify(cleanServerData));
       }
     } catch (err) {
       console.error(err);
@@ -307,6 +299,24 @@ export default function AdminPanelPage() {
     if (!confirm('Yakin ingin menghapus produk ini dari katalog?')) return;
 
     setSyncing(true);
+
+    // 1. Immediately blacklist ID in localStorage so it never reappears
+    try {
+      const deleted = JSON.parse(localStorage.getItem('mapdev_deleted_ids') || '[]');
+      if (!deleted.includes(id)) {
+        deleted.push(id);
+        localStorage.setItem('mapdev_deleted_ids', JSON.stringify(deleted));
+      }
+    } catch (e) {}
+
+    // 2. Immediately update local UI and local cache
+    setProducts((prev) => {
+      const next = prev.filter((p) => p.id !== id);
+      localStorage.setItem('mapdev_saved_products', JSON.stringify(next));
+      return next;
+    });
+
+    // 3. Send DELETE to server & commit to GitHub
     try {
       const res = await fetch(`/api/admin-panel/products?id=${id}`, {
         method: 'DELETE',
@@ -314,15 +324,13 @@ export default function AdminPanelPage() {
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setProducts(data.data);
-        localStorage.setItem('mapdev_saved_products', JSON.stringify(data.data));
         setStatusMessage({
           type: 'success',
-          text: 'Produk berhasil dihapus!',
+          text: 'Produk berhasil dihapus permanen!',
         });
       }
     } catch (err) {
-      alert('Gagal menghapus produk');
+      console.error('Delete API error:', err);
     } finally {
       setSyncing(false);
     }
