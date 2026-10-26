@@ -147,6 +147,8 @@ export async function POST(request: NextRequest) {
         tags: Array.isArray(product.tags) ? product.tags : (product.tags || '').split(',').map((t: string) => t.trim()).filter(Boolean),
         robloxAssetId: product.robloxAssetId || undefined,
         downloadUrl: product.downloadUrl || undefined,
+        fileName: product.fileName || undefined,
+        fileData: product.fileData || undefined,
         luauCode: product.luauCode || undefined,
         fileSize: product.fileSize || '1.0 MB',
         creator: {

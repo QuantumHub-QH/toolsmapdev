@@ -125,7 +125,18 @@ export const AssetCard: React.FC<AssetCardProps> = ({
 
       {/* Card Action Footer */}
       <div className="mt-4 pt-3 border-t border-border/80 flex items-center justify-between gap-2">
-        {asset.robloxAssetId ? (
+        {asset.fileData ? (
+          <a
+            href={asset.fileData}
+            download={asset.fileName || `${asset.title.toLowerCase().replace(/[^a-z0-9]/g, '_')}.${asset.format === 'RBXM' ? 'rbxm' : 'zip'}`}
+            onClick={(e) => e.stopPropagation()}
+            className="flex-1 flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 py-1.5 px-2 text-xs font-mono text-zinc-300 hover:border-white hover:text-white transition-colors"
+            title="Download File Langsung"
+          >
+            <Download className="h-3 w-3 text-white" />
+            <span className="text-[11px] truncate font-medium">Download ({asset.fileSize || 'File'})</span>
+          </a>
+        ) : asset.robloxAssetId ? (
           <button
             onClick={handleCopyAssetId}
             className="flex-1 flex items-center justify-center gap-1.5 rounded-lg border border-border bg-zinc-900/90 py-1.5 px-2 text-xs font-mono text-zinc-300 hover:border-zinc-500 hover:text-white transition-colors"

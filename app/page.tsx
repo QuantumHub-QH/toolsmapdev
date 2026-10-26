@@ -76,14 +76,29 @@ export default function Home() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Load live assets from backend API
+  // Load live assets from backend API + instant sync
   useEffect(() => {
+    // 1. Instant load from local storage if available
+    try {
+      const local = localStorage.getItem('mapdev_saved_products');
+      if (local) {
+        const parsed = JSON.parse(local);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setAssetsList(parsed);
+        }
+      }
+    } catch (e) {}
+
+    // 2. Fetch live data from backend
     async function fetchLiveAssets() {
       try {
-        const res = await fetch('/api/assets');
+        const res = await fetch('/api/assets?t=' + Date.now());
         const json = await res.json();
         if (json.success && Array.isArray(json.data)) {
-          setAssetsList(json.data);
+          if (json.data.length > 0) {
+            setAssetsList(json.data);
+            localStorage.setItem('mapdev_saved_products', JSON.stringify(json.data));
+          }
         }
       } catch (err) {
         console.error('Failed to fetch live assets:', err);

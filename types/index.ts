@@ -18,6 +18,8 @@ export interface Asset {
   tags: string[];
   robloxAssetId?: string;
   downloadUrl?: string;
+  fileName?: string;
+  fileData?: string;
   luauCode?: string;
   fileSize?: string;
   creator: {

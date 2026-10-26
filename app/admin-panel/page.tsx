@@ -18,7 +18,10 @@ import {
   EyeOff, 
   ArrowLeft,
   CloudCheck,
-  Box
+  Box,
+  FileUp,
+  FileCode,
+  HardDrive
 } from 'lucide-react';
 import { Asset, AssetCategory } from '@/types';
 
@@ -35,6 +38,10 @@ export default function AdminPanelPage() {
   const [isLocked, setIsLocked] = useState(false);
   const [lockTimer, setLockTimer] = useState(0);
 
+  // GitHub Auto-Commit Token
+  const [githubToken, setGithubToken] = useState('');
+  const [showTokenInput, setShowTokenInput] = useState(false);
+
   const [products, setProducts] = useState<Asset[]>([]);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -47,6 +54,12 @@ export default function AdminPanelPage() {
   const [format, setFormat] = useState<'RBXM' | 'OBJ' | 'PNG / PBR' | 'LUAU' | 'AUDIO' | 'PRESET'>('RBXM');
   const [thumbnailUrl, setThumbnailUrl] = useState('');
   const [imagePreview, setImagePreview] = useState('');
+  
+  // Direct Uploaded Map File
+  const [uploadedFileName, setUploadedFileName] = useState('');
+  const [uploadedFileData, setUploadedFileData] = useState('');
+
+  // Fallback options
   const [robloxAssetId, setRobloxAssetId] = useState('');
   const [downloadUrl, setDownloadUrl] = useState('');
   const [luauCode, setLuauCode] = useState('');
@@ -54,12 +67,17 @@ export default function AdminPanelPage() {
   const [creatorName, setCreatorName] = useState('Admin Riki');
   const [tagsInput, setTagsInput] = useState('free, roblox, dev');
 
-  // Check login session & lockout
+  // Check login session & token
   useEffect(() => {
     const savedAuth = sessionStorage.getItem('admin_panel_session');
     if (savedAuth === 'authenticated') {
       setIsAuthenticated(true);
       fetchProducts();
+    }
+
+    const savedToken = localStorage.getItem('mapdev_github_token');
+    if (savedToken) {
+      setGithubToken(savedToken);
     }
 
     const savedLock = localStorage.getItem('admin_lock_until');
@@ -119,7 +137,7 @@ export default function AdminPanelPage() {
         setFailCount(nextFails);
         if (nextFails >= 3) {
           setIsLocked(true);
-          const lockSeconds = 900; // 15 menit
+          const lockSeconds = 900;
           setLockTimer(lockSeconds);
           localStorage.setItem('admin_lock_until', (Date.now() + lockSeconds * 1000).toString());
           setLoginError('⛔ Terlalu banyak percobaan salah! Akses terkunci selama 15 menit.');
@@ -143,10 +161,18 @@ export default function AdminPanelPage() {
   const fetchProducts = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/admin-panel/products');
+      // Check local cache first
+      const local = localStorage.getItem('mapdev_saved_products');
+      if (local) {
+        const parsed = JSON.parse(local);
+        if (Array.isArray(parsed)) setProducts(parsed);
+      }
+
+      const res = await fetch('/api/admin-panel/products?t=' + Date.now());
       const data = await res.json();
       if (data.success && Array.isArray(data.data)) {
         setProducts(data.data);
+        localStorage.setItem('mapdev_saved_products', JSON.stringify(data.data));
       }
     } catch (err) {
       console.error(err);
@@ -155,11 +181,12 @@ export default function AdminPanelPage() {
     }
   };
 
+  // Upload Thumbnail Image
   const handleImageFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-        alert('Ukuran gambar maksimal 2MB.');
+      if (file.size > 3 * 1024 * 1024) {
+        alert('Ukuran gambar maksimal 3MB.');
         return;
       }
       const reader = new FileReader();
@@ -167,6 +194,31 @@ export default function AdminPanelPage() {
         const base64 = reader.result as string;
         setThumbnailUrl(base64);
         setImagePreview(base64);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // Upload Map File (.rbxm, .rbxl, .zip, .obj, etc.) for direct download from web
+  const handleMapFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 30 * 1024 * 1024) {
+        alert('Ukuran file map maksimal 30MB untuk direct web storage.');
+        return;
+      }
+      setUploadedFileName(file.name);
+      const sizeMb = (file.size / (1024 * 1024)).toFixed(2);
+      setFileSize(`${sizeMb} MB`);
+
+      const ext = file.name.split('.').pop()?.toUpperCase() || '';
+      if (ext === 'RBXM' || ext === 'RBXL') setFormat('RBXM');
+      else if (ext === 'OBJ') setFormat('OBJ');
+      else if (ext === 'ZIP' || ext === 'RAR') setFormat('RBXM');
+
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setUploadedFileData(reader.result as string);
       };
       reader.readAsDataURL(file);
     }
@@ -190,6 +242,8 @@ export default function AdminPanelPage() {
       subcategory: subcategory.trim() || 'General',
       format,
       thumbnail: thumbnailUrl || 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80',
+      fileName: uploadedFileName || undefined,
+      fileData: uploadedFileData || undefined,
       robloxAssetId: robloxAssetId.trim() || undefined,
       downloadUrl: downloadUrl.trim() || undefined,
       luauCode: luauCode.trim() || undefined,
@@ -203,16 +257,17 @@ export default function AdminPanelPage() {
       const res = await fetch('/api/admin-panel/products', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ product: productPayload }),
+        body: JSON.stringify({ product: productPayload, token: githubToken }),
       });
 
       const data = await res.json();
       if (res.ok && data.success) {
         setStatusMessage({
           type: 'success',
-          text: data.message || 'Produk berhasil disimpan ke katalog!',
+          text: data.message || '✅ Produk berhasil disimpan dan disinkronkan ke web publik!',
         });
         setProducts(data.data);
+        localStorage.setItem('mapdev_saved_products', JSON.stringify(data.data));
         resetForm();
       } else {
         setStatusMessage({
@@ -237,10 +292,12 @@ export default function AdminPanelPage() {
     try {
       const res = await fetch(`/api/admin-panel/products?id=${id}`, {
         method: 'DELETE',
+        headers: { 'x-github-token': githubToken },
       });
       const data = await res.json();
       if (res.ok && data.success) {
         setProducts(data.data);
+        localStorage.setItem('mapdev_saved_products', JSON.stringify(data.data));
         setStatusMessage({
           type: 'success',
           text: 'Produk berhasil dihapus!',
@@ -262,6 +319,8 @@ export default function AdminPanelPage() {
     setFormat(item.format);
     setThumbnailUrl(item.thumbnail);
     setImagePreview(item.thumbnail);
+    setUploadedFileName(item.fileName || '');
+    setUploadedFileData(item.fileData || '');
     setRobloxAssetId(item.robloxAssetId || '');
     setDownloadUrl(item.downloadUrl || '');
     setLuauCode(item.luauCode || '');
@@ -280,6 +339,8 @@ export default function AdminPanelPage() {
     setFormat('RBXM');
     setThumbnailUrl('');
     setImagePreview('');
+    setUploadedFileName('');
+    setUploadedFileData('');
     setRobloxAssetId('');
     setDownloadUrl('');
     setLuauCode('');
@@ -309,7 +370,7 @@ export default function AdminPanelPage() {
               await fetch('/api/admin-panel/products', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ product: item }),
+                body: JSON.stringify({ product: item, token: githubToken }),
               });
             }
             await fetchProducts();
@@ -418,7 +479,7 @@ export default function AdminPanelPage() {
           <div className="flex items-center gap-3">
             <Link href="/" className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-black/60 px-2.5 py-1 text-xs text-zinc-300 hover:text-white">
               <ArrowLeft className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Web Publik</span>
+              <span className="hidden sm:inline">Lihat Web Publik</span>
             </Link>
             <div className="h-4 w-px bg-zinc-800" />
             <div className="flex items-center gap-2">
@@ -481,23 +542,32 @@ export default function AdminPanelPage() {
           </div>
         )}
 
-        {/* Info Banner */}
-        <div className="rounded-2xl border border-zinc-800 bg-[#121217] p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        {/* GitHub Auto-Sync & Backup Bar */}
+        <div className="rounded-2xl border border-zinc-800 bg-[#121217] p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
           <div className="flex items-start gap-3">
-            <div className="h-10 w-10 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
-              <ShieldCheck className="h-5 w-5" />
+            <div className="h-9 w-9 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
+              <CloudCheck className="h-5 w-5" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                Penyimpanan Permanen (Aman dari Redeploy Vercel)
-              </h3>
-              <p className="text-xs text-zinc-400 mt-1 max-w-2xl leading-relaxed">
-                Produk yang kamu input di sini otomatis tersimpan di katalog dan disinkronkan ke repo GitHub. Tidak akan hilang meskipun Vercel dideploy ulang.
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-bold text-white">GitHub Permanent Sync Terpasang</h3>
+                <span className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.2 rounded font-mono">Auto-Commit</span>
+              </div>
+              <p className="text-xs text-zinc-400 mt-0.5 max-w-xl">
+                Setiap kali klik <strong>Publish Produk</strong>, data otomatis disimpan ke repo GitHub kamu. Produk tidak akan pernah hilang meskipun Vercel dideploy ulang.
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowTokenInput(!showTokenInput)}
+              className="rounded-lg border border-zinc-700 bg-black/60 px-3 py-2 text-xs font-mono text-zinc-300 hover:text-white"
+            >
+              {showTokenInput ? 'Tutup Token' : 'Lihat Token GitHub'}
+            </button>
+
             <label className="cursor-pointer flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-black/60 px-3 py-2 text-xs font-mono text-zinc-300 hover:text-white">
               <Upload className="h-3.5 w-3.5" />
               <span>Import JSON</span>
@@ -505,6 +575,35 @@ export default function AdminPanelPage() {
             </label>
           </div>
         </div>
+
+        {/* GitHub Token Config Dropdown */}
+        {showTokenInput && (
+          <div className="rounded-xl border border-zinc-700 bg-black/80 p-4 space-y-2 text-xs font-mono animate-fade-in">
+            <label className="block text-zinc-300">GitHub Personal Access Token (Untuk Sinkronisasi Otomatis):</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="password"
+                value={githubToken}
+                onChange={(e) => {
+                  setGithubToken(e.target.value);
+                  localStorage.setItem('mapdev_github_token', e.target.value);
+                }}
+                className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-white"
+                placeholder="ghp_..."
+              />
+              <button
+                type="button"
+                onClick={() => alert('Token berhasil disimpan!')}
+                className="rounded-lg bg-white px-4 py-2 font-bold text-black hover:bg-zinc-200"
+              >
+                Simpan
+              </button>
+            </div>
+            <p className="text-[10px] text-zinc-500">
+              Token ini digunakan untuk auto-commit produk baru ke <code>data/products.json</code> di repo kamu.
+            </p>
+          </div>
+        )}
 
         {/* 2-Column Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
@@ -541,7 +640,7 @@ export default function AdminPanelPage() {
                   required
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  placeholder="e.g. Cyberpunk Hover Car Pack"
+                  placeholder="e.g. Cyberpunk Obby Map Pack"
                   className="w-full rounded-xl border border-zinc-700 bg-black px-3.5 py-2 text-xs text-white focus:border-white focus:outline-none"
                 />
               </div>
@@ -556,7 +655,7 @@ export default function AdminPanelPage() {
                   rows={3}
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Detail fitur, polycount, cara pakai..."
+                  placeholder="Jelaskan detail map/aset, cara pakai, dll..."
                   className="w-full rounded-xl border border-zinc-700 bg-black px-3.5 py-2 text-xs text-white focus:border-white focus:outline-none resize-none"
                 />
               </div>
@@ -596,43 +695,94 @@ export default function AdminPanelPage() {
                 </div>
               </div>
 
-              {/* File Resource */}
-              <div className="rounded-xl border border-zinc-800 bg-black/40 p-3 space-y-3">
-                <label className="block text-xs font-mono font-bold text-white">
-                  4. File Produk (Roblox ID / Link Download / Script):
-                </label>
-
-                <div>
-                  <span className="block text-[11px] font-mono text-zinc-400 mb-1">A. Roblox Asset ID:</span>
-                  <input
-                    type="text"
-                    value={robloxAssetId}
-                    onChange={(e) => setRobloxAssetId(e.target.value)}
-                    placeholder="e.g. 13894729104"
-                    className="w-full rounded-lg border border-zinc-700 bg-black px-3 py-1.5 text-xs text-white focus:border-white focus:outline-none font-mono"
-                  />
+              {/* SECTION 4: DIRECT FILE UPLOAD (TANPA MEDIAFIRE) */}
+              <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/5 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-mono font-bold text-white flex items-center gap-1.5">
+                    <FileUp className="h-4 w-4 text-emerald-400" />
+                    <span>4. Upload File Map Langsung</span>
+                  </label>
+                  <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded">
+                    Direct Web Download
+                  </span>
                 </div>
 
-                <div>
-                  <span className="block text-[11px] font-mono text-zinc-400 mb-1">B. URL Download File (Google Drive / GitHub / Mediafire):</span>
+                <div className="rounded-xl border border-dashed border-zinc-700 bg-black/60 p-4 text-center hover:border-zinc-500 transition-colors">
                   <input
-                    type="text"
-                    value={downloadUrl}
-                    onChange={(e) => setDownloadUrl(e.target.value)}
-                    placeholder="https://drive.google.com/..."
-                    className="w-full rounded-lg border border-zinc-700 bg-black px-3 py-1.5 text-xs text-white focus:border-white focus:outline-none font-mono"
+                    type="file"
+                    id="map-file-upload-input"
+                    accept=".rbxm,.rbxl,.zip,.rar,.obj,.fbx,.png,.lua,.luau"
+                    onChange={handleMapFileUpload}
+                    className="hidden"
                   />
+                  <label htmlFor="map-file-upload-input" className="cursor-pointer block">
+                    <Upload className="h-6 w-6 text-emerald-400 mx-auto mb-1.5" />
+                    <p className="text-xs font-semibold text-white">
+                      Klik untuk Upload File Map dari Laptop/HP
+                    </p>
+                    <p className="text-[10px] text-zinc-400 mt-1">
+                      Format: <strong>.rbxm, .rbxl, .zip, .rar, .obj</strong> (Max 30MB)
+                    </p>
+                  </label>
                 </div>
 
-                <div>
-                  <span className="block text-[11px] font-mono text-zinc-400 mb-1">C. Script Luau (Jika produk berupa script):</span>
-                  <textarea
-                    rows={2}
-                    value={luauCode}
-                    onChange={(e) => setLuauCode(e.target.value)}
-                    placeholder="-- Paste kode Luau di sini..."
-                    className="w-full rounded-lg border border-zinc-700 bg-black p-2 text-[11px] font-mono text-zinc-300 focus:border-white focus:outline-none resize-none"
-                  />
+                {uploadedFileName ? (
+                  <div className="flex items-center justify-between rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-3 py-2 text-xs text-emerald-300 font-mono">
+                    <div className="flex items-center gap-2 truncate">
+                      <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                      <span className="truncate">File siap: <strong>{uploadedFileName}</strong> ({fileSize})</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => { setUploadedFileName(''); setUploadedFileData(''); }}
+                      className="text-zinc-400 hover:text-red-400 ml-2"
+                      title="Batalkan File"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-zinc-400 font-mono">
+                    💡 Pengunjung bisa langsung mendownload file ini dari web kamu tanpa link pihak ketiga seperti Mediafire!
+                  </p>
+                )}
+
+                {/* Optional Fallbacks */}
+                <div className="pt-2 border-t border-zinc-800 space-y-2">
+                  <span className="text-[10px] font-mono text-zinc-400 block">Atau gunakan opsi alternatif di bawah ini (jika ada):</span>
+
+                  <div>
+                    <span className="block text-[11px] font-mono text-zinc-400 mb-1">A. Roblox Asset ID:</span>
+                    <input
+                      type="text"
+                      value={robloxAssetId}
+                      onChange={(e) => setRobloxAssetId(e.target.value)}
+                      placeholder="e.g. 13894729104"
+                      className="w-full rounded-lg border border-zinc-700 bg-black px-3 py-1.5 text-xs text-white focus:border-white focus:outline-none font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <span className="block text-[11px] font-mono text-zinc-400 mb-1">B. URL Download File Eksternal (Opsional):</span>
+                    <input
+                      type="text"
+                      value={downloadUrl}
+                      onChange={(e) => setDownloadUrl(e.target.value)}
+                      placeholder="https://drive.google.com/... atau github release"
+                      className="w-full rounded-lg border border-zinc-700 bg-black px-3 py-1.5 text-xs text-white focus:border-white focus:outline-none font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <span className="block text-[11px] font-mono text-zinc-400 mb-1">C. Script Luau (Jika produk berupa codingan):</span>
+                    <textarea
+                      rows={2}
+                      value={luauCode}
+                      onChange={(e) => setLuauCode(e.target.value)}
+                      placeholder="-- Paste kode Luau di sini jika produk berupa script..."
+                      className="w-full rounded-lg border border-zinc-700 bg-black p-2 text-[11px] font-mono text-zinc-300 focus:border-white focus:outline-none resize-none"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -662,10 +812,10 @@ export default function AdminPanelPage() {
                     onChange={(e) => setFormat(e.target.value as any)}
                     className="w-full rounded-xl border border-zinc-700 bg-black px-3 py-2 text-xs text-white focus:border-white focus:outline-none"
                   >
-                    <option value="RBXM">RBXM</option>
-                    <option value="OBJ">OBJ</option>
+                    <option value="RBXM">RBXM (Roblox Model/Map)</option>
+                    <option value="OBJ">OBJ / 3D Mesh</option>
                     <option value="PNG / PBR">PNG / PBR</option>
-                    <option value="LUAU">LUAU</option>
+                    <option value="LUAU">LUAU Script</option>
                     <option value="AUDIO">AUDIO</option>
                     <option value="PRESET">PRESET</option>
                   </select>
@@ -713,7 +863,7 @@ export default function AdminPanelPage() {
                     type="text"
                     value={tagsInput}
                     onChange={(e) => setTagsInput(e.target.value)}
-                    placeholder="car, cyber, model"
+                    placeholder="map, roblox, free"
                     className="w-full rounded-xl border border-zinc-700 bg-black px-3 py-2 text-xs text-white focus:border-white focus:outline-none"
                   />
                 </div>
@@ -729,7 +879,7 @@ export default function AdminPanelPage() {
                   {syncing ? (
                     <>
                       <RefreshCw className="h-4 w-4 animate-spin" />
-                      <span>Menyimpan ke Katalog...</span>
+                      <span>Menyimpan ke Web Publik...</span>
                     </>
                   ) : (
                     <>
@@ -751,7 +901,7 @@ export default function AdminPanelPage() {
                   Daftar Produk Aktif ({products.length})
                 </h2>
                 <p className="text-xs text-zinc-400">
-                  Produk yang tampil di sini langsung terlihat oleh pengunjung di web utama.
+                  Produk yang ada di sini langsung tampil bagi semua pengunjung web utama.
                 </p>
               </div>
             </div>
@@ -782,6 +932,11 @@ export default function AdminPanelPage() {
                           <span className="text-[11px] font-mono text-zinc-400">
                             {item.category} • {item.subcategory}
                           </span>
+                          {item.fileName && (
+                            <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/30">
+                              Direct Download
+                            </span>
+                          )}
                         </div>
                         <h3 className="text-sm font-semibold text-white truncate max-w-sm">
                           {item.title}

@@ -145,7 +145,16 @@ export const AssetModal: React.FC<AssetModalProps> = ({
                 </div>
               )}
 
-              {asset.downloadUrl && (
+              {asset.fileData ? (
+                <a
+                  href={asset.fileData}
+                  download={asset.fileName || `${asset.title.toLowerCase().replace(/[^a-z0-9]/g, '_')}.${asset.format === 'RBXM' ? 'rbxm' : 'zip'}`}
+                  className="flex items-center justify-center gap-2 w-full rounded-xl border border-white bg-white text-black font-bold py-2.5 px-4 text-xs hover:bg-zinc-200 transition-colors shadow-lg cursor-pointer"
+                >
+                  <Download className="h-4 w-4 text-black" />
+                  <span>Download File Langsung ({asset.fileName || asset.fileSize})</span>
+                </a>
+              ) : asset.downloadUrl ? (
                 <a
                   href={asset.downloadUrl}
                   target="_blank"
@@ -155,7 +164,7 @@ export const AssetModal: React.FC<AssetModalProps> = ({
                   <Download className="h-4 w-4" />
                   <span>Download Resource File ({asset.fileSize})</span>
                 </a>
-              )}
+              ) : null}
             </div>
 
             {/* Creator Info */}
