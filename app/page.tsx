@@ -17,6 +17,7 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<AssetCategory>('all');
   const [sortBy, setSortBy] = useState<'popular' | 'newest' | 'downloads'>('popular');
+  const [assetsList, setAssetsList] = useState<Asset[]>(ASSETS_DATA);
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [bookmarkedIds, setBookmarkedIds] = useState<string[]>([]);
   const [isSubmitOpen, setIsSubmitOpen] = useState(false);
@@ -75,9 +76,25 @@ export default function Home() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // Load live assets from backend API
+  useEffect(() => {
+    async function fetchLiveAssets() {
+      try {
+        const res = await fetch('/api/assets');
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+          setAssetsList(json.data);
+        }
+      } catch (err) {
+        console.error('Failed to fetch live assets:', err);
+      }
+    }
+    fetchLiveAssets();
+  }, []);
+
   // Filter & sort assets
   const filteredAssets = useMemo(() => {
-    let result = [...ASSETS_DATA];
+    let result = [...assetsList];
 
     if (selectedCategory !== 'all') {
       result = result.filter((a) => a.category === selectedCategory);
@@ -90,8 +107,8 @@ export default function Home() {
           a.title.toLowerCase().includes(q) ||
           a.description.toLowerCase().includes(q) ||
           a.subcategory.toLowerCase().includes(q) ||
-          a.tags.some((t) => t.toLowerCase().includes(q)) ||
-          a.creator.name.toLowerCase().includes(q)
+          (a.tags && a.tags.some((t) => t.toLowerCase().includes(q))) ||
+          (a.creator && a.creator.name.toLowerCase().includes(q))
       );
     }
 
@@ -104,11 +121,11 @@ export default function Home() {
     }
 
     return result;
-  }, [searchQuery, selectedCategory, sortBy]);
+  }, [searchQuery, selectedCategory, sortBy, assetsList]);
 
   const bookmarkedAssets = useMemo(() => {
-    return ASSETS_DATA.filter((a) => bookmarkedIds.includes(a.id));
-  }, [bookmarkedIds]);
+    return assetsList.filter((a) => bookmarkedIds.includes(a.id));
+  }, [bookmarkedIds, assetsList]);
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
@@ -137,7 +154,7 @@ export default function Home() {
         selectedCategory={selectedCategory}
         setSelectedCategory={setSelectedCategory}
         searchInputRef={searchInputRef}
-        totalAssets={ASSETS_DATA.length}
+        totalAssets={assetsList.length}
       />
 
       {/* Asset Catalog Section */}
