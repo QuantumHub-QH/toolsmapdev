@@ -1,12 +1,13 @@
 export type AssetCategory =
   | 'all'
-  | 'models'
-  | 'pbr'
-  | 'scripts'
-  | 'lighting'
-  | 'skyboxes'
-  | 'sfx'
-  | 'ui';
+  | 'layout-map'
+  | 'clubkit'
+  | 'sumitkit'
+  | 'dekorasi-club'
+  | 'dekorasi-sumit'
+  | 'system';
+
+export type AssetFormat = 'RBXM' | 'OBJ' | 'IMG' | 'LUAU' | 'ID' | 'FILE' | 'SCRIPT';
 
 export interface Asset {
   id: string;
@@ -32,7 +33,7 @@ export interface Asset {
     favorites: number;
     views: number;
   };
-  format: 'RBXM' | 'OBJ' | 'PNG / PBR' | 'LUAU' | 'AUDIO' | 'PRESET';
+  format: AssetFormat;
   license: string;
   updatedAt: string;
 }

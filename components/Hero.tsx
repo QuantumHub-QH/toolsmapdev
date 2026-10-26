@@ -16,13 +16,12 @@ interface HeroProps {
 
 const CATEGORIES: { id: AssetCategory; label: string; icon: string }[] = [
   { id: 'all', label: 'All Resources', icon: '✦' },
-  { id: 'models', label: '3D Models & Props', icon: '📦' },
-  { id: 'pbr', label: 'PBR Textures', icon: '🎨' },
-  { id: 'scripts', label: 'Luau Scripts', icon: '⚡' },
-  { id: 'lighting', label: 'Lighting Presets', icon: '☀️' },
-  { id: 'skyboxes', label: '8K Skyboxes', icon: '🌌' },
-  { id: 'sfx', label: 'Map Audio & SFX', icon: '🔊' },
-  { id: 'ui', label: 'Developer UI Kits', icon: '🖥️' },
+  { id: 'layout-map', label: 'Layout Map', icon: '🗺️' },
+  { id: 'clubkit', label: 'ClubKit', icon: '🏛️' },
+  { id: 'sumitkit', label: 'SumitKit', icon: '⛰️' },
+  { id: 'dekorasi-club', label: 'Dekorasi Club', icon: '🎨' },
+  { id: 'dekorasi-sumit', label: 'Dekorasi Sumit', icon: '🌿' },
+  { id: 'system', label: 'System', icon: '⚙️' },
 ];
 
 export const Hero: React.FC<HeroProps> = ({

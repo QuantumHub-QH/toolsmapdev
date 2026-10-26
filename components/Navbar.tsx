@@ -40,10 +40,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const navItems = [
-    { id: 'assets', label: 'Free Assets', icon: Box },
+    { id: 'assets', label: 'Map Assets', icon: Box },
     { id: 'tools', label: 'Dev Tools', icon: Wrench },
-    { id: 'lighting', label: 'Lighting Studio', icon: SunMedium },
-    { id: 'snippets', label: 'Luau Scripts', icon: Code2 },
   ];
 
   const handleNavClick = (id: string) => {

@@ -23,7 +23,7 @@ import {
   FileCode,
   HardDrive
 } from 'lucide-react';
-import { Asset, AssetCategory } from '@/types';
+import { Asset, AssetCategory, AssetFormat } from '@/types';
 
 export default function AdminPanelPage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -49,9 +49,9 @@ export default function AdminPanelPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [category, setCategory] = useState<AssetCategory>('models');
+  const [category, setCategory] = useState<AssetCategory>('layout-map');
   const [subcategory, setSubcategory] = useState('General');
-  const [format, setFormat] = useState<'RBXM' | 'OBJ' | 'PNG / PBR' | 'LUAU' | 'AUDIO' | 'PRESET'>('RBXM');
+  const [format, setFormat] = useState<AssetFormat>('RBXM');
   const [thumbnailUrl, setThumbnailUrl] = useState('');
   const [imagePreview, setImagePreview] = useState('');
   
@@ -334,7 +334,7 @@ export default function AdminPanelPage() {
     setEditingId(null);
     setTitle('');
     setDescription('');
-    setCategory('models');
+    setCategory('layout-map');
     setSubcategory('General');
     setFormat('RBXM');
     setThumbnailUrl('');
@@ -774,14 +774,27 @@ export default function AdminPanelPage() {
                   </div>
 
                   <div>
-                    <span className="block text-[11px] font-mono text-zinc-400 mb-1">C. Script Luau (Jika produk berupa codingan):</span>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[11px] font-mono text-zinc-300 font-semibold flex items-center gap-1.5">
+                        <FileCode className="h-3.5 w-3.5 text-amber-400" />
+                        <span>C. Tulis Script Luau / Codingan System:</span>
+                      </span>
+                      {category === 'system' && (
+                        <span className="text-[10px] font-mono text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/30">
+                          System Tool Script
+                        </span>
+                      )}
+                    </div>
                     <textarea
-                      rows={2}
+                      rows={5}
                       value={luauCode}
                       onChange={(e) => setLuauCode(e.target.value)}
-                      placeholder="-- Paste kode Luau di sini jika produk berupa script..."
-                      className="w-full rounded-lg border border-zinc-700 bg-black p-2 text-[11px] font-mono text-zinc-300 focus:border-white focus:outline-none resize-none"
+                      placeholder="-- Tulis atau paste script Luau di sini (e.g. Teleport, Leaderstats, Door, Lighting, Game System)&#10;local Players = game:GetService('Players')&#10;&#10;local function onPlayerAdded(player)&#10;    print('Developer Joined: ' .. player.Name)&#10;end&#10;&#10;Players.PlayerAdded:Connect(onPlayerAdded)"
+                      className="w-full rounded-lg border border-zinc-700 bg-black p-2.5 text-[11px] font-mono text-emerald-400 focus:border-white focus:outline-none resize-y"
                     />
+                    <p className="text-[10px] text-zinc-500 font-mono mt-1">
+                      💡 Script yang ditulis di sini bisa langsung di-copy atau di-download oleh user dari web.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -789,19 +802,18 @@ export default function AdminPanelPage() {
               {/* Kategori, Format & Ukuran */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-mono text-zinc-300 mb-1">Kategori:</label>
+                  <label className="block text-xs font-mono text-zinc-300 mb-1">Kategori *:</label>
                   <select
                     value={category}
                     onChange={(e) => setCategory(e.target.value as any)}
                     className="w-full rounded-xl border border-zinc-700 bg-black px-3 py-2 text-xs text-white focus:border-white focus:outline-none"
                   >
-                    <option value="models">3D Models & Props</option>
-                    <option value="pbr">PBR Textures</option>
-                    <option value="scripts">Luau Scripts</option>
-                    <option value="lighting">Lighting Presets</option>
-                    <option value="skyboxes">Skyboxes</option>
-                    <option value="sfx">Audio & SFX</option>
-                    <option value="ui">Developer UI</option>
+                    <option value="layout-map">🗺️ LAYOUT MAP</option>
+                    <option value="clubkit">🏛️ CLUBKIT</option>
+                    <option value="sumitkit">⛰️ SUMITKIT</option>
+                    <option value="dekorasi-club">🎨 DEKORASI CLUB</option>
+                    <option value="dekorasi-sumit">🌿 DEKORASI SUMIT</option>
+                    <option value="system">⚙️ SYSTEM (Tools / Script / ID / File)</option>
                   </select>
                 </div>
 
@@ -813,11 +825,12 @@ export default function AdminPanelPage() {
                     className="w-full rounded-xl border border-zinc-700 bg-black px-3 py-2 text-xs text-white focus:border-white focus:outline-none"
                   >
                     <option value="RBXM">RBXM (Roblox Model/Map)</option>
-                    <option value="OBJ">OBJ / 3D Mesh</option>
-                    <option value="PNG / PBR">PNG / PBR</option>
+                    <option value="OBJ">OBJ (3D Mesh)</option>
+                    <option value="IMG">IMG (Gambar / Texture)</option>
                     <option value="LUAU">LUAU Script</option>
-                    <option value="AUDIO">AUDIO</option>
-                    <option value="PRESET">PRESET</option>
+                    <option value="SCRIPT">SCRIPT</option>
+                    <option value="ID">ROBLOX ASSET ID</option>
+                    <option value="FILE">DIRECT FILE</option>
                   </select>
                 </div>
               </div>
