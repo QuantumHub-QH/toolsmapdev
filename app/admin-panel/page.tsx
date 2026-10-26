@@ -161,18 +161,36 @@ export default function AdminPanelPage() {
   const fetchProducts = async () => {
     setLoading(true);
     try {
-      // Check local cache first
+      // 1. Check local cache first
+      let localProducts: Asset[] = [];
       const local = localStorage.getItem('mapdev_saved_products');
       if (local) {
-        const parsed = JSON.parse(local);
-        if (Array.isArray(parsed)) setProducts(parsed);
+        try {
+          const parsed = JSON.parse(local);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            localProducts = parsed;
+            setProducts(parsed);
+          }
+        } catch (e) {}
       }
 
+      // 2. Fetch from backend
       const res = await fetch('/api/admin-panel/products?t=' + Date.now());
       const data = await res.json();
       if (data.success && Array.isArray(data.data)) {
-        setProducts(data.data);
-        localStorage.setItem('mapdev_saved_products', JSON.stringify(data.data));
+        if (data.data.length > 0) {
+          setProducts(data.data);
+          localStorage.setItem('mapdev_saved_products', JSON.stringify(data.data));
+        } else if (localProducts.length > 0) {
+          // If server returned empty but local has products, restore local products to server!
+          for (const item of localProducts) {
+            await fetch('/api/admin-panel/products', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ product: item }),
+            });
+          }
+        }
       }
     } catch (err) {
       console.error(err);

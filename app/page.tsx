@@ -89,16 +89,18 @@ export default function Home() {
     }
   }, []);
 
-  // Save bookmarks
+  // Save bookmarks & update favorites real-time
   const toggleBookmark = (id: string) => {
+    const isCurrentlyBookmarked = bookmarkedIds.includes(id);
+
     setBookmarkedIds((prev) => {
       let next: string[];
       if (prev.includes(id)) {
         next = prev.filter((item) => item !== id);
-        showToast('Asset removed from bookmarks');
+        showToast('Asset dihapus dari bookmark');
       } else {
         next = [...prev, id];
-        showToast('Asset saved to bookmarks!');
+        showToast('Asset disimpan ke bookmark!');
       }
       try {
         localStorage.setItem('mapdev_bookmarks', JSON.stringify(next));
@@ -107,6 +109,55 @@ export default function Home() {
       }
       return next;
     });
+
+    // Update favorites count on assetsList
+    setAssetsList((prev) => {
+      const updated = prev.map((item) => {
+        if (item.id === id) {
+          const currentFavs = item.stats?.favorites || 0;
+          const nextFavs = isCurrentlyBookmarked ? Math.max(0, currentFavs - 1) : currentFavs + 1;
+          return {
+            ...item,
+            stats: {
+              ...item.stats,
+              favorites: nextFavs,
+            },
+          };
+        }
+        return item;
+      });
+
+      try {
+        localStorage.setItem('mapdev_saved_products', JSON.stringify(updated));
+      } catch (e) {}
+
+      return updated;
+    });
+
+    // Also update selectedAsset in modal immediately
+    setSelectedAsset((curr) => {
+      if (curr && curr.id === id) {
+        const currentFavs = curr.stats?.favorites || 0;
+        const nextFavs = isCurrentlyBookmarked ? Math.max(0, currentFavs - 1) : currentFavs + 1;
+        return {
+          ...curr,
+          stats: {
+            ...curr.stats,
+            favorites: nextFavs,
+          },
+        };
+      }
+      return curr;
+    });
+
+    // Background sync to backend & GitHub
+    try {
+      fetch('/api/assets/favorite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, action: isCurrentlyBookmarked ? 'unlike' : 'like' }),
+      }).catch(() => {});
+    } catch (e) {}
   };
 
   const showToast = (msg: string) => {
@@ -359,7 +410,10 @@ export default function Home() {
       </section>
 
       {/* Interactive Developer Tools Section */}
-      <DevToolsSection />
+      <DevToolsSection 
+        discordUser={discordUser} 
+        onOpenDiscordAuth={() => setIsDiscordModalOpen(true)} 
+      />
 
       {/* Modals */}
       <AssetModal

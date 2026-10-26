@@ -11,27 +11,23 @@ const GITHUB_RAW_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/main/${
 // Helper to read products
 async function getProducts(): Promise<Asset[]> {
   try {
-    if (fs.existsSync(DATA_FILE_PATH)) {
-      const content = fs.readFileSync(DATA_FILE_PATH, 'utf-8');
-      const parsed = JSON.parse(content);
-      if (Array.isArray(parsed)) return parsed;
-    }
-  } catch (e) {
-    // fallback
-  }
-
-  try {
     const res = await fetch(`${GITHUB_RAW_URL}?t=${Date.now()}`, {
       next: { revalidate: 0 },
-      headers: { 'Cache-Control': 'no-cache' },
+      headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' },
     });
     if (res.ok) {
       const data = await res.json();
-      if (Array.isArray(data)) return data;
+      if (Array.isArray(data) && data.length > 0) return data;
     }
-  } catch (e) {
-    // fallback
-  }
+  } catch (e) {}
+
+  try {
+    if (fs.existsSync(DATA_FILE_PATH)) {
+      const content = fs.readFileSync(DATA_FILE_PATH, 'utf-8');
+      const parsed = JSON.parse(content);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch (e) {}
 
   return [];
 }
@@ -52,9 +48,6 @@ function writeLocal(products: Asset[]) {
 // Helper to commit to GitHub repo for 100% permanent persistence
 async function syncToGitHub(products: Asset[], token?: string): Promise<{ success: boolean; message?: string }> {
   const ghToken = token || process.env.GITHUB_TOKEN;
-  if (!ghToken) {
-    return { success: false, message: 'Simpan lokal berhasil. (Tambahkan GITHUB_TOKEN di Vercel env untuk auto-commit ke GitHub).' };
-  }
 
   try {
     // 1. Get current sha
@@ -94,7 +87,7 @@ async function syncToGitHub(products: Asset[], token?: string): Promise<{ succes
     if (putRes.ok) {
       return { success: true, message: 'Produk berhasil disimpan dan disinkronkan ke GitHub (Aman dari redeploy Vercel)!' };
     } else {
-      const err = await putRes.json();
+      const err = await putRes.json().catch(() => ({}));
       return { success: false, message: err.message || 'Gagal commit ke GitHub' };
     }
   } catch (err: any) {
@@ -114,68 +107,71 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { product, token } = body;
+    const productData = body.product;
+    const token = body.token;
 
-    if (!product || !product.title || !product.category) {
+    if (!productData || !productData.title) {
       return NextResponse.json(
-        { success: false, error: 'Judul dan Kategori produk wajib diisi!' },
+        { success: false, error: 'Data produk tidak lengkap' },
         { status: 400 }
       );
     }
 
-    const current = await getProducts();
-    const now = new Date().toISOString().split('T')[0];
+    const currentProducts = await getProducts();
+    const existingIndex = currentProducts.findIndex((p) => p.id === productData.id);
+
+    const nowIso = new Date().toISOString();
+    const formattedProduct: Asset = {
+      id: productData.id || `asset-${Date.now()}`,
+      title: productData.title,
+      description: productData.description || '',
+      category: productData.category || 'layout-map',
+      subcategory: productData.subcategory || 'General',
+      format: productData.format || 'RBXM',
+      thumbnail: productData.thumbnail || 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80',
+      fileName: productData.fileName,
+      fileData: productData.fileData,
+      robloxAssetId: productData.robloxAssetId,
+      downloadUrl: productData.downloadUrl,
+      luauCode: productData.luauCode,
+      fileSize: productData.fileSize || '1.0 MB',
+      creator: {
+        name: productData.creatorName || 'Admin Riki',
+        verified: true,
+      },
+      stats: existingIndex >= 0 ? currentProducts[existingIndex].stats : {
+        downloads: 0,
+        favorites: 0,
+        views: 1,
+      },
+      license: productData.license || 'Free Community Asset',
+      tags: productData.tags || ['free', 'roblox'],
+      updatedAt: nowIso,
+    };
 
     let updatedList: Asset[];
-    const existingIndex = current.findIndex((item) => item.id === product.id);
-
     if (existingIndex >= 0) {
-      updatedList = [...current];
-      updatedList[existingIndex] = {
-        ...current[existingIndex],
-        ...product,
-        updatedAt: now,
-      };
+      updatedList = [...currentProducts];
+      updatedList[existingIndex] = formattedProduct;
     } else {
-      const newProduct: Asset = {
-        id: product.id || `asset-${Date.now()}`,
-        title: product.title,
-        category: product.category,
-        subcategory: product.subcategory || 'General',
-        description: product.description || '',
-        thumbnail: product.thumbnail || 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80',
-        tags: Array.isArray(product.tags) ? product.tags : (product.tags || '').split(',').map((t: string) => t.trim()).filter(Boolean),
-        robloxAssetId: product.robloxAssetId || undefined,
-        downloadUrl: product.downloadUrl || undefined,
-        fileName: product.fileName || undefined,
-        fileData: product.fileData || undefined,
-        luauCode: product.luauCode || undefined,
-        fileSize: product.fileSize || '1.0 MB',
-        creator: {
-          name: product.creatorName || 'Admin Riki',
-          verified: true,
-        },
-        stats: { downloads: 0, favorites: 0, views: 0 },
-        format: product.format || 'RBXM',
-        license: product.license || 'Free Community Asset',
-        updatedAt: now,
-      };
-      updatedList = [newProduct, ...current];
+      updatedList = [formattedProduct, ...currentProducts];
     }
 
+    // 1. Write local
     writeLocal(updatedList);
-    const gitHubResult = await syncToGitHub(updatedList, token);
+
+    // 2. Commit to GitHub
+    const syncRes = await syncToGitHub(updatedList, token);
 
     return NextResponse.json({
       success: true,
-      message: gitHubResult.message || 'Produk berhasil disimpan!',
-      githubSync: gitHubResult,
-      total: updatedList.length,
+      message: syncRes.message || 'Produk berhasil disimpan!',
       data: updatedList,
+      syncedWithGitHub: syncRes.success,
     });
-  } catch (error: any) {
+  } catch (err: any) {
     return NextResponse.json(
-      { success: false, error: error.message || 'Gagal menyimpan produk' },
+      { success: false, error: err.message || 'Gagal menyimpan produk' },
       { status: 500 }
     );
   }
@@ -188,25 +184,27 @@ export async function DELETE(request: NextRequest) {
     const token = request.headers.get('x-github-token') || undefined;
 
     if (!id) {
-      return NextResponse.json({ success: false, error: 'Product ID required' }, { status: 400 });
+      return NextResponse.json({ success: false, error: 'ID produk tidak ditemukan' }, { status: 400 });
     }
 
-    const current = await getProducts();
-    const updatedList = current.filter((item) => item.id !== id);
+    const currentProducts = await getProducts();
+    const updatedList = currentProducts.filter((p) => p.id !== id);
 
+    // 1. Write local
     writeLocal(updatedList);
-    const gitHubResult = await syncToGitHub(updatedList, token);
+
+    // 2. Commit to GitHub
+    const syncRes = await syncToGitHub(updatedList, token);
 
     return NextResponse.json({
       success: true,
       message: 'Produk berhasil dihapus!',
-      githubSync: gitHubResult,
-      total: updatedList.length,
       data: updatedList,
+      syncedWithGitHub: syncRes.success,
     });
-  } catch (error: any) {
+  } catch (err: any) {
     return NextResponse.json(
-      { success: false, error: error.message || 'Gagal menghapus produk' },
+      { success: false, error: err.message || 'Gagal menghapus produk' },
       { status: 500 }
     );
   }

@@ -23,8 +23,14 @@ import {
   Sparkles,
   ShieldCheck,
   Eye,
-  EyeOff
+  EyeOff,
+  Sliders,
+  Volume2,
+  Gauge,
+  Lock,
+  ArrowRight
 } from 'lucide-react';
+import { DiscordUser } from './DiscordAuthModal';
 
 interface RobloxSession {
   apiKey: string;
@@ -37,16 +43,112 @@ interface RobloxSession {
 interface UploadQueueItem {
   id: string;
   file: File;
+  processedFile?: File;
   name: string;
   size: string;
   type: 'Audio' | 'Decal';
   previewUrl: string;
-  status: 'pending' | 'uploading' | 'success' | 'error';
+  status: 'pending' | 'processing' | 'uploading' | 'success' | 'error';
   assetId?: string;
   errorMessage?: string;
+  speed: number;
+  pitch: number;
+  volume: number;
 }
 
-export const DevToolsSection: React.FC = () => {
+interface DevToolsSectionProps {
+  discordUser: DiscordUser | null;
+  onOpenDiscordAuth: () => void;
+}
+
+// Convert AudioBuffer to 16-bit PCM WAV Blob
+function audioBufferToWav(buffer: AudioBuffer): Blob {
+  const numOfChan = buffer.numberOfChannels;
+  const length = buffer.length * numOfChan * 2 + 44;
+  const out = new DataView(new ArrayBuffer(length));
+  const channels: Float32Array[] = [];
+  const sampleRate = buffer.sampleRate;
+  let offset = 0;
+  let pos = 0;
+
+  function setUint16(data: number) { out.setUint16(pos, data, true); pos += 2; }
+  function setUint32(data: number) { out.setUint32(pos, data, true); pos += 4; }
+
+  // RIFF header
+  out.setUint32(0, 0x46464952, true); // "RIFF"
+  out.setUint32(4, length - 8, true);
+  out.setUint32(8, 0x45564157, true); // "WAVE"
+  out.setUint32(12, 0x20746d66, true); // "fmt "
+  out.setUint32(16, 16, true);
+  setUint16(1); // PCM format
+  setUint16(numOfChan);
+  setUint32(sampleRate);
+  setUint32(sampleRate * 2 * numOfChan);
+  setUint16(numOfChan * 2);
+  setUint16(16);
+  out.setUint32(36, 0x61746164, true); // "data"
+  out.setUint32(40, length - 44, true);
+  pos = 44;
+
+  for (let i = 0; i < numOfChan; i++) {
+    channels.push(buffer.getChannelData(i));
+  }
+
+  while (offset < buffer.length) {
+    for (let i = 0; i < numOfChan; i++) {
+      let sample = Math.max(-1, Math.min(1, channels[i][offset]));
+      sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767) | 0;
+      out.setInt16(pos, sample, true);
+      pos += 2;
+    }
+    offset++;
+  }
+
+  return new Blob([out.buffer], { type: 'audio/wav' });
+}
+
+// Process audio with Speed & Volume using OfflineAudioContext
+async function processAudioFile(file: File, speed: number, volume: number): Promise<File> {
+  if (speed === 1.0 && volume === 100) return file;
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const decodedBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+    const targetLength = Math.max(1, Math.floor(decodedBuffer.length / speed));
+    const offlineCtx = new OfflineAudioContext(
+      decodedBuffer.numberOfChannels,
+      targetLength,
+      decodedBuffer.sampleRate
+    );
+
+    const source = offlineCtx.createBufferSource();
+    source.buffer = decodedBuffer;
+    source.playbackRate.value = speed;
+
+    const gainNode = offlineCtx.createGain();
+    gainNode.gain.value = volume / 100;
+
+    source.connect(gainNode);
+    gainNode.connect(offlineCtx.destination);
+
+    source.start(0);
+    const renderedBuffer = await offlineCtx.startRendering();
+    const wavBlob = audioBufferToWav(renderedBuffer);
+
+    const newFileName = `${file.name.replace(/\.[^/.]+$/, '')}_speed_${speed}x.wav`;
+    return new File([wavBlob], newFileName, { type: 'audio/wav' });
+  } catch (e) {
+    console.error('Audio processing fallback to original:', e);
+    return file;
+  }
+}
+
+export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
+  discordUser,
+  onOpenDiscordAuth,
+}) => {
   // Active tool tab: Audio or Image (DIPISAH)
   const [activeTool, setActiveTool] = useState<'audio' | 'image'>('audio');
 
@@ -58,7 +160,19 @@ export const DevToolsSection: React.FC = () => {
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
 
-  // Upload Queues for Audio and Image (Separated)
+  // Daily Upload Limit via Discord (10/day, max 10/batch)
+  const [dailyQuota, setDailyQuota] = useState<{ limit: number; used: number; remaining: number }>({
+    limit: 10,
+    used: 0,
+    remaining: 10,
+  });
+
+  // Audio Customization Settings
+  const [audioSpeed, setAudioSpeed] = useState<number>(1.0);
+  const [audioPitch, setAudioPitch] = useState<number>(1.0);
+  const [audioVolume, setAudioVolume] = useState<number>(100);
+
+  // Upload Queues for Audio and Image (Max 10 per batch)
   const [audioQueue, setAudioQueue] = useState<UploadQueueItem[]>([]);
   const [imageQueue, setImageQueue] = useState<UploadQueueItem[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -67,6 +181,7 @@ export const DevToolsSection: React.FC = () => {
   // Copy feedback
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [copiedAll, setCopiedAll] = useState(false);
+  const [copiedScript, setCopiedScript] = useState(false);
 
   // Audio Playback state for preview
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
@@ -86,6 +201,41 @@ export const DevToolsSection: React.FC = () => {
       console.error('Error loading roblox session:', e);
     }
   }, []);
+
+  // Fetch / Sync Daily Quota for Discord User
+  const fetchDailyQuota = async () => {
+    if (!discordUser || !discordUser.id) return;
+    try {
+      const res = await fetch(`/api/roblox/limit?discordId=${encodeURIComponent(discordUser.id)}`);
+      const data = await res.json();
+      if (data.success) {
+        setDailyQuota({
+          limit: data.limit || 10,
+          used: data.used || 0,
+          remaining: data.remaining ?? 10,
+        });
+      }
+    } catch (e) {
+      console.error('Error fetching quota:', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchDailyQuota();
+  }, [discordUser]);
+
+  // Recommended In-Game Roblox PlaybackSpeed
+  const recommendedPlaybackSpeed = audioSpeed > 0 ? (1 / audioSpeed).toFixed(2) : '1.00';
+
+  // Bypass Presets
+  const applyPreset = (speed: number, pitch: number) => {
+    setAudioSpeed(speed);
+    setAudioPitch(pitch);
+    // If playing preview, update live playback rate
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.playbackRate = speed;
+    }
+  };
 
   // Connect Roblox Account handler
   const handleConnectRoblox = async (e: React.FormEvent) => {
@@ -139,17 +289,29 @@ export const DevToolsSection: React.FC = () => {
     }
   };
 
-  // Add files to Audio Queue (Max 100)
+  // Add files to Audio Queue (Max 10 per batch, respecting remaining quota)
   const handleAudioFilesSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!discordUser) {
+      onOpenDiscordAuth();
+      return;
+    }
+
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
 
-    if (audioQueue.length + files.length > 100) {
-      alert(`Maksimal 100 file sekaligus! Saat ini sudah ada ${audioQueue.length} file di antrian.`);
+    if (dailyQuota.remaining <= 0) {
+      alert('Kuota upload hari ini sudah habis (10/10). Kuota akan reset kembali pada jam 00:00!');
+      return;
     }
 
-    const availableSlots = 100 - audioQueue.length;
-    const allowedFiles = files.slice(0, availableSlots);
+    const maxCanAdd = Math.min(10 - audioQueue.length, dailyQuota.remaining - audioQueue.length);
+
+    if (maxCanAdd <= 0) {
+      alert(`Maksimal 10 file per batch dan sisa kuota hari ini adalah ${dailyQuota.remaining} file!`);
+      return;
+    }
+
+    const allowedFiles = files.slice(0, maxCanAdd);
 
     const newItems: UploadQueueItem[] = allowedFiles.map((file, idx) => ({
       id: `audio-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`,
@@ -159,23 +321,38 @@ export const DevToolsSection: React.FC = () => {
       type: 'Audio',
       previewUrl: URL.createObjectURL(file),
       status: 'pending',
+      speed: audioSpeed,
+      pitch: audioPitch,
+      volume: audioVolume,
     }));
 
     setAudioQueue((prev) => [...prev, ...newItems]);
     e.target.value = '';
   };
 
-  // Add files to Image Queue (Max 100)
+  // Add files to Image Queue (Max 10 per batch, respecting remaining quota)
   const handleImageFilesSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!discordUser) {
+      onOpenDiscordAuth();
+      return;
+    }
+
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
 
-    if (imageQueue.length + files.length > 100) {
-      alert(`Maksimal 100 file sekaligus! Saat ini sudah ada ${imageQueue.length} file di antrian.`);
+    if (dailyQuota.remaining <= 0) {
+      alert('Kuota upload hari ini sudah habis (10/10). Kuota akan reset kembali pada jam 00:00!');
+      return;
     }
 
-    const availableSlots = 100 - imageQueue.length;
-    const allowedFiles = files.slice(0, availableSlots);
+    const maxCanAdd = Math.min(10 - imageQueue.length, dailyQuota.remaining - imageQueue.length);
+
+    if (maxCanAdd <= 0) {
+      alert(`Maksimal 10 file per batch dan sisa kuota hari ini adalah ${dailyQuota.remaining} file!`);
+      return;
+    }
+
+    const allowedFiles = files.slice(0, maxCanAdd);
 
     const newItems: UploadQueueItem[] = allowedFiles.map((file, idx) => ({
       id: `image-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`,
@@ -185,6 +362,9 @@ export const DevToolsSection: React.FC = () => {
       type: 'Decal',
       previewUrl: URL.createObjectURL(file),
       status: 'pending',
+      speed: 1.0,
+      pitch: 1.0,
+      volume: 100,
     }));
 
     setImageQueue((prev) => [...prev, ...newItems]);
@@ -217,7 +397,7 @@ export const DevToolsSection: React.FC = () => {
     }
   };
 
-  // Audio Play / Pause preview toggle
+  // Audio Play / Pause preview with realtime speed
   const togglePlayAudio = (id: string, url: string) => {
     if (!audioPlayerRef.current) {
       audioPlayerRef.current = new Audio();
@@ -229,6 +409,8 @@ export const DevToolsSection: React.FC = () => {
       setPlayingAudioId(null);
     } else {
       audio.src = url;
+      audio.playbackRate = audioSpeed;
+      audio.volume = Math.min(1, audioVolume / 100);
       audio.play().catch(() => {});
       setPlayingAudioId(id);
       audio.onended = () => setPlayingAudioId(null);
@@ -237,8 +419,19 @@ export const DevToolsSection: React.FC = () => {
 
   // Start Bulk Uploading to Roblox Open Cloud
   const handleStartBulkUpload = async (type: 'audio' | 'image') => {
+    if (!discordUser) {
+      alert('Harap hubungkan akun Discord terlebih dahulu untuk mengaktifkan kuota upload harian!');
+      onOpenDiscordAuth();
+      return;
+    }
+
     if (!robloxSession) {
       alert('Silakan hubungkan akun Roblox terlebih dahulu dengan API Key & User ID!');
+      return;
+    }
+
+    if (dailyQuota.remaining <= 0) {
+      alert('Kuota upload kamu hari ini sudah habis (10/10). Tunggu reset esok hari jam 00:00!');
       return;
     }
 
@@ -254,19 +447,31 @@ export const DevToolsSection: React.FC = () => {
     setUploadProgress({ current: 0, total: pendingItems.length });
 
     const setQueue = type === 'audio' ? setAudioQueue : setImageQueue;
+    let successfulUploadsCount = 0;
 
     for (let i = 0; i < pendingItems.length; i++) {
       const item = pendingItems[i];
       setUploadProgress({ current: i + 1, total: pendingItems.length });
 
-      // Update state to uploading
+      // Update status to processing / uploading
       setQueue((prev) =>
-        prev.map((q) => (q.id === item.id ? { ...q, status: 'uploading' } : q))
+        prev.map((q) => (q.id === item.id ? { ...q, status: 'processing' } : q))
       );
 
       try {
+        let fileToUpload = item.file;
+
+        // Process audio with Speed & Volume if audio type
+        if (type === 'audio' && (audioSpeed !== 1.0 || audioVolume !== 100)) {
+          fileToUpload = await processAudioFile(item.file, audioSpeed, audioVolume);
+        }
+
+        setQueue((prev) =>
+          prev.map((q) => (q.id === item.id ? { ...q, status: 'uploading' } : q))
+        );
+
         const formData = new FormData();
-        formData.append('file', item.file);
+        formData.append('file', fileToUpload);
         formData.append('assetType', type === 'audio' ? 'Audio' : 'Decal');
         formData.append('displayName', item.name.replace(/\.[^/.]+$/, ''));
         formData.append('apiKey', robloxSession.apiKey);
@@ -280,6 +485,7 @@ export const DevToolsSection: React.FC = () => {
         const result = await res.json();
 
         if (res.ok && result.success && result.assetId) {
+          successfulUploadsCount++;
           setQueue((prev) =>
             prev.map((q) =>
               q.id === item.id
@@ -287,6 +493,25 @@ export const DevToolsSection: React.FC = () => {
                 : q
             )
           );
+
+          // Decrement daily limit permanently via API
+          try {
+            const limitRes = await fetch('/api/roblox/limit', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ discordId: discordUser.id, count: 1 }),
+            });
+            const limitData = await limitRes.json();
+            if (limitData.success) {
+              setDailyQuota({
+                limit: limitData.limit,
+                used: limitData.used,
+                remaining: limitData.remaining,
+              });
+            }
+          } catch (e) {
+            console.error('Error updating limit:', e);
+          }
         } else {
           setQueue((prev) =>
             prev.map((q) =>
@@ -310,8 +535,8 @@ export const DevToolsSection: React.FC = () => {
         );
       }
 
-      // Small delay between uploads to respect Roblox rate limits
-      await new Promise((r) => setTimeout(r, 400));
+      // Small delay between uploads
+      await new Promise((r) => setTimeout(r, 500));
     }
 
     setIsUploading(false);
@@ -348,6 +573,14 @@ export const DevToolsSection: React.FC = () => {
     setTimeout(() => setCopiedAll(false), 2500);
   };
 
+  // Copy Roblox Studio Script PlaybackSpeed
+  const handleCopyScript = () => {
+    const script = `-- Script Roblox Studio (Normal Speed In-Game)\nsound.PlaybackSpeed = ${recommendedPlaybackSpeed}\nsound:Play()`;
+    navigator.clipboard.writeText(script);
+    setCopiedScript(true);
+    setTimeout(() => setCopiedScript(false), 2000);
+  };
+
   // Download log report (.txt)
   const handleDownloadLog = (type: 'audio' | 'image') => {
     const queue = type === 'audio' ? audioQueue : imageQueue;
@@ -355,7 +588,12 @@ export const DevToolsSection: React.FC = () => {
 
     let content = `=== ROBLOX ${type.toUpperCase()} BULK UPLOAD REPORT ===\n`;
     content += `Account: ${robloxSession ? `${robloxSession.displayName} (@${robloxSession.name}) - ID: ${robloxSession.userId}` : 'Unconnected'}\n`;
+    content += `Discord User: ${discordUser ? `@${discordUser.username} (${discordUser.id})` : 'Guest'}\n`;
     content += `Date: ${new Date().toLocaleString()}\n`;
+    if (type === 'audio') {
+      content += `Audio Speed: ${audioSpeed}x | Pitch: ${audioPitch}x | Volume: ${audioVolume}%\n`;
+      content += `Recommended In-Game PlaybackSpeed: ${recommendedPlaybackSpeed}\n`;
+    }
     content += `Total Files: ${queue.length}\n\n`;
 
     queue.forEach((q, idx) => {
@@ -381,20 +619,67 @@ export const DevToolsSection: React.FC = () => {
 
   return (
     <section id="tools" className="py-16 border-b border-border bg-[#09090c] text-foreground relative">
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 space-y-10">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 space-y-8">
 
         {/* Section Header */}
         <div className="text-center max-w-3xl mx-auto space-y-3">
           <div className="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 text-xs font-mono text-zinc-300">
             <span className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
-            <span>ROBLOX OPEN CLOUD AUTOMATION</span>
+            <span>ROBLOX OPEN CLOUD BULK UPLOADER</span>
           </div>
           <h2 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white uppercase font-mono">
             Roblox Bulk <span className="bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent">Uploader Tools</span>
           </h2>
           <p className="text-xs sm:text-sm text-zinc-400 leading-relaxed">
-            Upload hingga <strong>100 audio</strong> atau <strong>100 gambar/decal</strong> sekaligus langsung ke akun Roblox Studio kamu menggunakan Roblox Open Cloud API resmi.
+            Upload langsung ke akun Roblox Studio dengan bypass audio speed & pitch. Maksimal <strong>10 file per batch</strong> dengan kuota <strong>10 upload per hari</strong> terikat akun Discord.
           </p>
+        </div>
+
+        {/* DISCORD AUTHORIZATION & DAILY LIMIT STATUS BAR */}
+        <div className="rounded-2xl border border-zinc-800 bg-[#121217] p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-[#5865F2]/10 border border-[#5865F2]/30 flex items-center justify-center text-[#5865F2] shrink-0">
+              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.929 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.894.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z" />
+              </svg>
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono font-bold text-white">
+                  {discordUser ? `Discord: @${discordUser.username}` : 'Discord Belum Terhubung'}
+                </span>
+                {discordUser && (
+                  <span className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded font-mono">
+                    Limit Aktif
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-zinc-400 mt-0.5">
+                {discordUser
+                  ? 'Sistem kuota upload harian terhubung ke akun Discord kamu (Aman & Tidak reset saat redeploy).'
+                  : 'Harap login Discord terlebih dahulu agar kuota upload harian dapat tersimpan.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-4 shrink-0">
+            {/* Daily Quota Counter */}
+            <div className="rounded-xl border border-zinc-700 bg-black/60 px-4 py-2 text-center">
+              <span className="text-[10px] font-mono text-zinc-500 block uppercase">Sisa Kuota Hari Ini</span>
+              <span className={`text-base font-mono font-bold ${dailyQuota.remaining > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {dailyQuota.remaining} / {dailyQuota.limit} Upload
+              </span>
+            </div>
+
+            {!discordUser && (
+              <button
+                onClick={onOpenDiscordAuth}
+                className="flex items-center gap-2 rounded-xl bg-[#5865F2] hover:bg-[#4752c4] px-4 py-2 text-xs font-mono font-bold text-white transition-all shadow-md active:scale-95"
+              >
+                <span>Authorize Discord</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* 1. ROBLOX ACCOUNT CONNECTION SECTION */}
@@ -455,7 +740,7 @@ export const DevToolsSection: React.FC = () => {
                     <span>Hubungkan Akun Roblox (Open Cloud API)</span>
                   </h3>
                   <p className="text-xs text-zinc-400 mt-0.5">
-                    Masukkan API Key & User ID Roblox kamu untuk mulai bulk upload hingga 100 aset sekaligus.
+                    Masukkan API Key & User ID Roblox kamu untuk upload audio/gambar langsung ke akun Roblox Studio kamu.
                   </p>
                 </div>
 
@@ -549,7 +834,7 @@ export const DevToolsSection: React.FC = () => {
               }`}
             >
               <Music className="h-4 w-4" />
-              <span>1. Audio Uploader ({audioQueue.length}/100)</span>
+              <span>1. Audio Uploader ({audioQueue.length}/10)</span>
             </button>
 
             <button
@@ -561,7 +846,7 @@ export const DevToolsSection: React.FC = () => {
               }`}
             >
               <ImageIcon className="h-4 w-4" />
-              <span>2. Image Uploader ({imageQueue.length}/100)</span>
+              <span>2. Image Uploader ({imageQueue.length}/10)</span>
             </button>
           </div>
 
@@ -573,16 +858,212 @@ export const DevToolsSection: React.FC = () => {
         {/* 3. TOOL CONTENT PANELS */}
         {activeTool === 'audio' ? (
           /* ============================================================== */
-          /* 🎵 AUDIO UPLOADER VIEW (DIPISAH)                               */
+          /* 🎵 AUDIO UPLOADER VIEW (DIPISAH + SPEED/PITCH/VOLUME SETTINGS) */
           /* ============================================================== */
           <div className="space-y-6">
-            {/* Upload Zone */}
+
+            {/* AUDIO BYPASS & SPEED / PITCH / VOLUME CONTROLS */}
+            <div className="rounded-2xl border border-zinc-800 bg-[#101014] p-6 space-y-6">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-4 border-b border-zinc-800">
+                <div>
+                  <h3 className="text-sm font-bold text-white font-mono uppercase flex items-center gap-2">
+                    <Sliders className="h-4 w-4 text-blue-400" />
+                    <span>Audio Bypass DSP Settings (Speed, Pitch, Volume)</span>
+                  </h3>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Ubah kecepatan & pitch audio untuk lolos deteksi otomatis Roblox. Hasil preview dan upload akan mengikuti settingan ini!
+                  </p>
+                </div>
+
+                <div className="rounded-lg bg-blue-500/10 border border-blue-500/30 px-3 py-1 text-xs font-mono text-blue-400">
+                  Speed: <strong>{audioSpeed}x</strong> • Pitch: <strong>{audioPitch}x</strong>
+                </div>
+              </div>
+
+              {/* Template Bypass Buttons */}
+              <div>
+                <span className="block text-xs font-mono text-zinc-400 mb-2 font-semibold">
+                  ⚡ Pilihan Template Bypass Otomatis (Kombinasi Speed & Pitch):
+                </span>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+                  <button
+                    onClick={() => applyPreset(1.0, 1.0)}
+                    className={`rounded-xl border p-2.5 text-center transition-all ${
+                      audioSpeed === 1.0
+                        ? 'border-white bg-white text-black font-bold shadow-md'
+                        : 'border-zinc-800 bg-black/60 text-zinc-300 hover:border-zinc-600'
+                    }`}
+                  >
+                    <span className="block text-xs font-mono">Normal</span>
+                    <span className="text-[10px] text-zinc-500 font-mono block">1.0x (Orig)</span>
+                  </button>
+
+                  <button
+                    onClick={() => applyPreset(1.3, 1.15)}
+                    className={`rounded-xl border p-2.5 text-center transition-all ${
+                      audioSpeed === 1.3
+                        ? 'border-blue-400 bg-blue-500/20 text-blue-300 font-bold shadow-md'
+                        : 'border-zinc-800 bg-black/60 text-zinc-300 hover:border-zinc-600'
+                    }`}
+                  >
+                    <span className="block text-xs font-mono">Bypass 1.3x</span>
+                    <span className="text-[10px] text-blue-400/80 font-mono block">Speed: 1.3x</span>
+                  </button>
+
+                  <button
+                    onClick={() => applyPreset(2.3, 1.35)}
+                    className={`rounded-xl border p-2.5 text-center transition-all ${
+                      audioSpeed === 2.3
+                        ? 'border-indigo-400 bg-indigo-500/20 text-indigo-300 font-bold shadow-md'
+                        : 'border-zinc-800 bg-black/60 text-zinc-300 hover:border-zinc-600'
+                    }`}
+                  >
+                    <span className="block text-xs font-mono">Bypass 2.3x</span>
+                    <span className="text-[10px] text-indigo-400/80 font-mono block">Speed: 2.3x</span>
+                  </button>
+
+                  <button
+                    onClick={() => applyPreset(2.5, 1.45)}
+                    className={`rounded-xl border p-2.5 text-center transition-all ${
+                      audioSpeed === 2.5
+                        ? 'border-purple-400 bg-purple-500/20 text-purple-300 font-bold shadow-md'
+                        : 'border-zinc-800 bg-black/60 text-zinc-300 hover:border-zinc-600'
+                    }`}
+                  >
+                    <span className="block text-xs font-mono">Bypass 2.5x</span>
+                    <span className="text-[10px] text-purple-400/80 font-mono block">Speed: 2.5x</span>
+                  </button>
+
+                  <button
+                    onClick={() => applyPreset(3.0, 1.6)}
+                    className={`rounded-xl border p-2.5 text-center transition-all ${
+                      audioSpeed === 3.0
+                        ? 'border-rose-400 bg-rose-500/20 text-rose-300 font-bold shadow-md'
+                        : 'border-zinc-800 bg-black/60 text-zinc-300 hover:border-zinc-600'
+                    }`}
+                  >
+                    <span className="block text-xs font-mono">Bypass 3.0x</span>
+                    <span className="text-[10px] text-rose-400/80 font-mono block">Speed: 3.0x</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Sliders Grid: Speed, Pitch, Volume */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 pt-2">
+                {/* Speed Slider */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between text-xs font-mono">
+                    <span className="text-zinc-400">Audio Speed:</span>
+                    <span className="text-white font-bold">{audioSpeed.toFixed(1)}x</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="4.0"
+                    step="0.1"
+                    value={audioSpeed}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value);
+                      setAudioSpeed(val);
+                      if (audioPlayerRef.current) audioPlayerRef.current.playbackRate = val;
+                    }}
+                    className="w-full accent-blue-500 cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[10px] font-mono text-zinc-600">
+                    <span>0.5x</span>
+                    <span>1.0x</span>
+                    <span>2.3x</span>
+                    <span>4.0x</span>
+                  </div>
+                </div>
+
+                {/* Pitch Slider */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between text-xs font-mono">
+                    <span className="text-zinc-400">Audio Pitch:</span>
+                    <span className="text-white font-bold">{audioPitch.toFixed(2)}x</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="2.0"
+                    step="0.05"
+                    value={audioPitch}
+                    onChange={(e) => setAudioPitch(parseFloat(e.target.value))}
+                    className="w-full accent-indigo-500 cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[10px] font-mono text-zinc-600">
+                    <span>0.5x (Bass)</span>
+                    <span>1.0x</span>
+                    <span>2.0x (High)</span>
+                  </div>
+                </div>
+
+                {/* Volume Slider */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between text-xs font-mono">
+                    <span className="text-zinc-400">Audio Volume Boost:</span>
+                    <span className="text-white font-bold">{audioVolume}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="20"
+                    max="200"
+                    step="5"
+                    value={audioVolume}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 10);
+                      setAudioVolume(val);
+                      if (audioPlayerRef.current) audioPlayerRef.current.volume = Math.min(1, val / 100);
+                    }}
+                    className="w-full accent-purple-500 cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[10px] font-mono text-zinc-600">
+                    <span>20%</span>
+                    <span>100%</span>
+                    <span>200%</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* REAL-TIME RECOMMENDED PLAYBACKSPEED CARD */}
+              <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="h-9 w-9 rounded-lg bg-blue-500/20 flex items-center justify-center text-blue-400 shrink-0">
+                    <Gauge className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <span className="text-xs font-mono text-zinc-400 block">
+                      Rekomendasi Roblox In-Game PlaybackSpeed:
+                    </span>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-xl font-mono font-bold text-white tracking-wider">
+                        {recommendedPlaybackSpeed}
+                      </span>
+                      <span className="text-[11px] font-mono text-zinc-400">
+                        (Formula: 1 / {audioSpeed.toFixed(1)}x = {recommendedPlaybackSpeed})
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleCopyScript}
+                  className="flex items-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-500 px-3.5 py-2 text-xs font-mono font-bold text-white transition-all shadow-md active:scale-95 shrink-0"
+                >
+                  {copiedScript ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                  <span>{copiedScript ? 'Script Copied!' : 'Copy Script PlaybackSpeed'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Upload Zone (Max 10) */}
             <div className="rounded-2xl border-2 border-dashed border-blue-500/40 bg-blue-500/5 p-8 text-center hover:border-blue-500 transition-colors">
               <input
                 type="file"
                 id="bulk-audio-file-input"
                 multiple
-                accept=".mp3,.ogg"
+                accept=".mp3,.ogg,.wav"
                 onChange={handleAudioFilesSelected}
                 className="hidden"
               />
@@ -592,14 +1073,14 @@ export const DevToolsSection: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-white font-mono">
-                    Pilih File Audio (.mp3, .ogg) — Hingga 100 File Sekaligus
+                    Pilih File Audio (.mp3, .ogg) — Maksimal 10 File Sekali Upload
                   </h3>
                   <p className="text-xs text-zinc-400 mt-1">
                     Drag & drop atau klik untuk memilih file audio dari komputer atau HP kamu.
                   </p>
                 </div>
                 <div className="inline-flex items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/20 px-3.5 py-1 text-xs font-mono text-blue-300">
-                  <span>Batch Capacity: {audioQueue.length} / 100 Audio</span>
+                  <span>Batch Saat Ini: {audioQueue.length} / 10 Audio • Sisa Kuota Hari Ini: {dailyQuota.remaining}</span>
                 </div>
               </label>
             </div>
@@ -628,7 +1109,7 @@ export const DevToolsSection: React.FC = () => {
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => handleStartBulkUpload('audio')}
-                      disabled={isUploading || !robloxSession}
+                      disabled={isUploading || !robloxSession || !discordUser || dailyQuota.remaining <= 0}
                       className="flex items-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-500 px-4 py-2 text-xs font-mono font-bold text-white transition-all shadow-md active:scale-95 disabled:opacity-50"
                     >
                       <Upload className={`h-3.5 w-3.5 ${isUploading ? 'animate-bounce' : ''}`} />
@@ -688,7 +1169,7 @@ export const DevToolsSection: React.FC = () => {
                           <button
                             onClick={() => togglePlayAudio(item.id, item.previewUrl)}
                             className="h-8 w-8 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center shrink-0 hover:bg-blue-500 hover:text-white transition-colors"
-                            title="Play/Pause Preview Audio"
+                            title="Play/Pause Preview Audio dengan Speed aktif"
                           >
                             {playingAudioId === item.id ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5 fill-current" />}
                           </button>
@@ -696,7 +1177,9 @@ export const DevToolsSection: React.FC = () => {
                             <p className="text-xs font-mono font-bold text-white truncate" title={item.name}>
                               #{idx + 1} {item.name}
                             </p>
-                            <span className="text-[10px] font-mono text-zinc-500">{item.size}</span>
+                            <span className="text-[10px] font-mono text-zinc-500">
+                              {item.size} • Speed: {audioSpeed}x
+                            </span>
                           </div>
                         </div>
 
@@ -714,11 +1197,16 @@ export const DevToolsSection: React.FC = () => {
                       {/* Status / Result */}
                       <div className="pt-2 border-t border-zinc-800 flex items-center justify-between text-xs font-mono">
                         {item.status === 'pending' && (
-                          <span className="text-zinc-400 text-[11px]">Siap di-upload</span>
+                          <span className="text-zinc-400 text-[11px]">Siap di-upload ({audioSpeed}x)</span>
+                        )}
+                        {item.status === 'processing' && (
+                          <span className="text-amber-400 text-[11px] flex items-center gap-1">
+                            <RefreshCw className="h-3 w-3 animate-spin" /> Processing DSP...
+                          </span>
                         )}
                         {item.status === 'uploading' && (
                           <span className="text-blue-400 text-[11px] flex items-center gap-1">
-                            <RefreshCw className="h-3 w-3 animate-spin" /> Uploading...
+                            <RefreshCw className="h-3 w-3 animate-spin" /> Uploading to Roblox...
                           </span>
                         )}
                         {item.status === 'success' && (
@@ -749,10 +1237,10 @@ export const DevToolsSection: React.FC = () => {
           </div>
         ) : (
           /* ============================================================== */
-          /* 🖼️ IMAGE UPLOADER VIEW (DIPISAH)                               */
+          /* 🖼️ IMAGE UPLOADER VIEW (DIPISAH, MAX 10/BATCH & 10/DAY)         */
           /* ============================================================== */
           <div className="space-y-6">
-            {/* Upload Zone */}
+            {/* Upload Zone (Max 10) */}
             <div className="rounded-2xl border-2 border-dashed border-purple-500/40 bg-purple-500/5 p-8 text-center hover:border-purple-500 transition-colors">
               <input
                 type="file"
@@ -768,14 +1256,14 @@ export const DevToolsSection: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-white font-mono">
-                    Pilih File Gambar / Decal (.png, .jpg, .tga) — Hingga 100 File Sekaligus
+                    Pilih File Gambar / Decal (.png, .jpg, .tga) — Maksimal 10 File Sekali Upload
                   </h3>
                   <p className="text-xs text-zinc-400 mt-1">
                     Drag & drop atau klik untuk memilih file gambar dari komputer atau HP kamu.
                   </p>
                 </div>
                 <div className="inline-flex items-center gap-2 rounded-full border border-purple-500/30 bg-purple-500/20 px-3.5 py-1 text-xs font-mono text-purple-300">
-                  <span>Batch Capacity: {imageQueue.length} / 100 Gambar</span>
+                  <span>Batch Saat Ini: {imageQueue.length} / 10 Gambar • Sisa Kuota Hari Ini: {dailyQuota.remaining}</span>
                 </div>
               </label>
             </div>
@@ -804,7 +1292,7 @@ export const DevToolsSection: React.FC = () => {
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => handleStartBulkUpload('image')}
-                      disabled={isUploading || !robloxSession}
+                      disabled={isUploading || !robloxSession || !discordUser || dailyQuota.remaining <= 0}
                       className="flex items-center gap-2 rounded-lg bg-purple-600 hover:bg-purple-500 px-4 py-2 text-xs font-mono font-bold text-white transition-all shadow-md active:scale-95 disabled:opacity-50"
                     >
                       <Upload className={`h-3.5 w-3.5 ${isUploading ? 'animate-bounce' : ''}`} />
