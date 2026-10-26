@@ -46,10 +46,10 @@ An ultra-modern, high-performance developer hub and free resource suite for Robl
 
 ```bash
 # Clone the repository
-git clone https://github.com/gantengriki023-sudo/TOOLSDEVMAP.git
+git clone https://github.com/QuantumHub-QH/mchlern.git
 
 # Enter the project directory
-cd TOOLSDEVMAP
+cd mchlern
 
 # Install dependencies
 npm install

@@ -5,7 +5,7 @@ import { ASSETS_DATA } from '@/lib/data';
 import { Asset, AssetCategory } from '@/types';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
-const GITHUB_RAW_URL = 'https://raw.githubusercontent.com/gantengriki023-sudo/TOOLSDEVMAP/main/data/products.json';
+const GITHUB_RAW_URL = 'https://raw.githubusercontent.com/QuantumHub-QH/mchlern/main/data/products.json';
 
 async function getLiveAssets(): Promise<Asset[]> {
   // 1. Try reading from GitHub raw URL (most up-to-date across serverless instances)

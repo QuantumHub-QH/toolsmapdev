@@ -4,7 +4,7 @@ import path from 'path';
 import { Asset } from '@/types';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
-const GITHUB_REPO = 'gantengriki023-sudo/TOOLSDEVMAP';
+const GITHUB_REPO = 'QuantumHub-QH/mchlern';
 const GITHUB_FILE_PATH = 'data/products.json';
 const GITHUB_RAW_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/main/${GITHUB_FILE_PATH}`;
 
