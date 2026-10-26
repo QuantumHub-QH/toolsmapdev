@@ -78,7 +78,7 @@ export const Hero: React.FC<HeroProps> = ({
               <Cpu className="h-3.5 w-3.5" />
               <span>Dev Tools</span>
             </div>
-            <div className="text-xl font-bold font-mono text-white">5 Engines</div>
+            <div className="text-xl font-bold font-mono text-white">2 Cloud Tools</div>
           </div>
 
           {/* Real-time Downloads Count */}

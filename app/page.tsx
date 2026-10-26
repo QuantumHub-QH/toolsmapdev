@@ -183,6 +183,15 @@ export default function Home() {
       return next;
     });
 
+    // Background persistent sync to backend & GitHub so it never resets on redeploy
+    try {
+      fetch('/api/assets/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: assetId }),
+      }).catch((err) => console.error('Download sync err:', err));
+    } catch (e) {}
+
     showToast('Download started! Total unduhan diperbarui.');
   };
 
