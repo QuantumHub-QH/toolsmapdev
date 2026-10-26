@@ -6,8 +6,8 @@ import { Hero } from '@/components/Hero';
 import { AssetCard } from '@/components/AssetCard';
 import { AssetModal } from '@/components/AssetModal';
 import { DevToolsSection } from '@/components/DevToolsSection';
-import { SubmitModal } from '@/components/SubmitModal';
 import { BookmarksModal } from '@/components/BookmarksModal';
+import { DiscordAuthModal, DiscordUser } from '@/components/DiscordAuthModal';
 import { Footer } from '@/components/Footer';
 import { ASSETS_DATA } from '@/lib/data';
 import { Asset, AssetCategory } from '@/types';
@@ -20,12 +20,37 @@ export default function Home() {
   const [assetsList, setAssetsList] = useState<Asset[]>(ASSETS_DATA);
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [bookmarkedIds, setBookmarkedIds] = useState<string[]>([]);
-  const [isSubmitOpen, setIsSubmitOpen] = useState(false);
   const [isBookmarksOpen, setIsBookmarksOpen] = useState(false);
   const [activeSection, setActiveSection] = useState('assets');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Discord Authorization State
+  const [discordUser, setDiscordUser] = useState<DiscordUser | null>(null);
+  const [isDiscordModalOpen, setIsDiscordModalOpen] = useState(false);
+
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Load Discord user session or auto-trigger authorize popup
+  useEffect(() => {
+    try {
+      const savedUser = localStorage.getItem('mapdev_discord_user');
+      if (savedUser) {
+        const parsed = JSON.parse(savedUser);
+        if (parsed && parsed.isAuthorized) {
+          setDiscordUser(parsed);
+          return;
+        }
+      }
+      // If not yet authorized with Discord, auto-trigger popup on entry
+      const timer = setTimeout(() => {
+        setIsDiscordModalOpen(true);
+      }, 600);
+      return () => clearTimeout(timer);
+    } catch (e) {
+      console.error('Error loading discord session:', e);
+      setIsDiscordModalOpen(true);
+    }
+  }, []);
 
   // Load bookmarks from localStorage
   useEffect(() => {
@@ -107,6 +132,40 @@ export default function Home() {
     fetchLiveAssets();
   }, []);
 
+  // Real-time download handler
+  const handleDownload = (assetId: string) => {
+    setAssetsList((prev) => {
+      const next = prev.map((item) => {
+        if (item.id === assetId) {
+          const currentDownloads = item.stats?.downloads || 0;
+          return {
+            ...item,
+            stats: {
+              ...item.stats,
+              downloads: currentDownloads + 1,
+            },
+          };
+        }
+        return item;
+      });
+
+      try {
+        localStorage.setItem('mapdev_saved_products', JSON.stringify(next));
+      } catch (e) {
+        console.error(e);
+      }
+
+      return next;
+    });
+
+    showToast('Download started! Total unduhan diperbarui.');
+  };
+
+  // Total real-time downloads across all assets
+  const totalDownloads = useMemo(() => {
+    return assetsList.reduce((acc, curr) => acc + (curr.stats?.downloads || 0), 0);
+  }, [assetsList]);
+
   // Filter & sort assets
   const filteredAssets = useMemo(() => {
     let result = [...assetsList];
@@ -128,9 +187,9 @@ export default function Home() {
     }
 
     if (sortBy === 'popular') {
-      result.sort((a, b) => b.stats.favorites - a.stats.favorites);
+      result.sort((a, b) => (b.stats?.favorites || 0) - (a.stats?.favorites || 0));
     } else if (sortBy === 'downloads') {
-      result.sort((a, b) => b.stats.downloads - a.stats.downloads);
+      result.sort((a, b) => (b.stats?.downloads || 0) - (a.stats?.downloads || 0));
     } else if (sortBy === 'newest') {
       result.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
     }
@@ -154,12 +213,18 @@ export default function Home() {
 
       {/* Main Navbar */}
       <Navbar
-        onOpenSubmit={() => setIsSubmitOpen(true)}
         onOpenBookmarks={() => setIsBookmarksOpen(true)}
         bookmarksCount={bookmarkedIds.length}
         activeSection={activeSection}
         setActiveSection={setActiveSection}
         onSearchFocus={() => searchInputRef.current?.focus()}
+        discordUser={discordUser}
+        onOpenDiscordAuth={() => setIsDiscordModalOpen(true)}
+        onLogoutDiscord={() => {
+          localStorage.removeItem('mapdev_discord_user');
+          setDiscordUser(null);
+          showToast('Discord session disconnected');
+        }}
       />
 
       {/* Hero Header & Search */}
@@ -170,6 +235,7 @@ export default function Home() {
         setSelectedCategory={setSelectedCategory}
         searchInputRef={searchInputRef}
         totalAssets={assetsList.length}
+        totalDownloads={totalDownloads}
       />
 
       {/* Asset Catalog Section */}
@@ -249,6 +315,7 @@ export default function Home() {
                   onSelect={setSelectedAsset}
                   isBookmarked={bookmarkedIds.includes(asset.id)}
                   onToggleBookmark={toggleBookmark}
+                  onDownload={handleDownload}
                 />
               ))}
             </div>
@@ -266,11 +333,7 @@ export default function Home() {
         onClose={() => setSelectedAsset(null)}
         isBookmarked={selectedAsset ? bookmarkedIds.includes(selectedAsset.id) : false}
         onToggleBookmark={toggleBookmark}
-      />
-
-      <SubmitModal
-        isOpen={isSubmitOpen}
-        onClose={() => setIsSubmitOpen(false)}
+        onDownload={handleDownload}
       />
 
       <BookmarksModal
@@ -279,6 +342,16 @@ export default function Home() {
         bookmarkedAssets={bookmarkedAssets}
         onRemoveBookmark={toggleBookmark}
         onSelectAsset={setSelectedAsset}
+      />
+
+      {/* Discord Authorization Modal */}
+      <DiscordAuthModal
+        isOpen={isDiscordModalOpen}
+        onClose={() => setIsDiscordModalOpen(false)}
+        onAuthorize={(user) => {
+          setDiscordUser(user);
+          showToast(`Welcome, @${user.username}! Discord connected.`);
+        }}
       />
 
       {/* Footer */}

@@ -19,6 +19,7 @@ interface AssetCardProps {
   onSelect: (asset: Asset) => void;
   isBookmarked: boolean;
   onToggleBookmark: (id: string) => void;
+  onDownload?: (assetId: string) => void;
 }
 
 export const AssetCard: React.FC<AssetCardProps> = ({
@@ -26,6 +27,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({
   onSelect,
   isBookmarked,
   onToggleBookmark,
+  onDownload,
 }) => {
   const [copied, setCopied] = useState(false);
 
@@ -129,7 +131,10 @@ export const AssetCard: React.FC<AssetCardProps> = ({
           <a
             href={asset.fileData}
             download={asset.fileName || `${asset.title.toLowerCase().replace(/[^a-z0-9]/g, '_')}.${asset.format === 'RBXM' ? 'rbxm' : 'zip'}`}
-            onClick={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDownload?.(asset.id);
+            }}
             className="flex-1 flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 py-1.5 px-2 text-xs font-mono text-zinc-300 hover:border-white hover:text-white transition-colors"
             title="Download File Langsung"
           >

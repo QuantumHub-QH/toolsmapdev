@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Search, Sparkles, Filter, DownloadCloud, Layers, Cpu, ShieldCheck } from 'lucide-react';
+import { Search, Sparkles, Filter, DownloadCloud, Layers, Cpu, Crown } from 'lucide-react';
 import { AssetCategory } from '@/types';
 
 interface HeroProps {
@@ -11,6 +11,7 @@ interface HeroProps {
   setSelectedCategory: (cat: AssetCategory) => void;
   searchInputRef: React.RefObject<HTMLInputElement>;
   totalAssets: number;
+  totalDownloads: number;
 }
 
 const CATEGORIES: { id: AssetCategory; label: string; icon: string }[] = [
@@ -31,6 +32,7 @@ export const Hero: React.FC<HeroProps> = ({
   setSelectedCategory,
   searchInputRef,
   totalAssets,
+  totalDownloads,
 }) => {
   return (
     <section className="relative overflow-hidden border-b border-border bg-background pt-12 pb-10">
@@ -45,7 +47,7 @@ export const Hero: React.FC<HeroProps> = ({
           <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
           <span>ROBLOX STUDIO & MAP DEVELOPER SUITE</span>
           <span className="text-zinc-600">|</span>
-          <span className="text-white font-semibold">100% FREE</span>
+          <span className="text-white font-semibold">100% FREE ASSETS</span>
         </div>
 
         {/* Hero Headline */}
@@ -58,16 +60,20 @@ export const Hero: React.FC<HeroProps> = ({
           Level design toolkit, production-grade Luau mechanics, 4K PBR surfaces, modular 3D props, and interactive map calculators for builders & developers.
         </p>
 
-        {/* Quick Stats Strip */}
+        {/* Quick Real-Time Stats Strip */}
         <div className="mt-8 grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-3xl mx-auto">
+          {/* Real-time Free Assets Count */}
           <div className="rounded-xl border border-border bg-surface/60 p-3 backdrop-blur-sm">
             <div className="flex items-center justify-center gap-1.5 text-zinc-400 text-xs mb-1">
               <Layers className="h-3.5 w-3.5" />
               <span>Free Assets</span>
             </div>
-            <div className="text-xl font-bold font-mono text-white">500+</div>
+            <div className="text-xl font-bold font-mono text-white">
+              {totalAssets}
+            </div>
           </div>
 
+          {/* Dev Tools Count */}
           <div className="rounded-xl border border-border bg-surface/60 p-3 backdrop-blur-sm">
             <div className="flex items-center justify-center gap-1.5 text-zinc-400 text-xs mb-1">
               <Cpu className="h-3.5 w-3.5" />
@@ -76,20 +82,26 @@ export const Hero: React.FC<HeroProps> = ({
             <div className="text-xl font-bold font-mono text-white">5 Engines</div>
           </div>
 
+          {/* Real-time Downloads Count */}
           <div className="rounded-xl border border-border bg-surface/60 p-3 backdrop-blur-sm">
             <div className="flex items-center justify-center gap-1.5 text-zinc-400 text-xs mb-1">
               <DownloadCloud className="h-3.5 w-3.5" />
               <span>Downloads</span>
             </div>
-            <div className="text-xl font-bold font-mono text-white">45.2K+</div>
+            <div className="text-xl font-bold font-mono text-white">
+              {totalDownloads}
+            </div>
           </div>
 
+          {/* Premium Users Slot */}
           <div className="rounded-xl border border-border bg-surface/60 p-3 backdrop-blur-sm">
             <div className="flex items-center justify-center gap-1.5 text-zinc-400 text-xs mb-1">
-              <ShieldCheck className="h-3.5 w-3.5" />
-              <span>Paywall</span>
+              <Crown className="h-3.5 w-3.5 text-amber-400" />
+              <span>Premium User</span>
             </div>
-            <div className="text-xl font-bold font-mono text-white">0 Robux</div>
+            <div className="text-xl font-bold font-mono text-amber-300">
+              0 <span className="text-[11px] font-mono text-zinc-500 font-normal">(Coming Soon)</span>
+            </div>
           </div>
         </div>
 

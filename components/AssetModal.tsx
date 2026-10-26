@@ -22,6 +22,7 @@ interface AssetModalProps {
   onClose: () => void;
   isBookmarked: boolean;
   onToggleBookmark: (id: string) => void;
+  onDownload?: (assetId: string) => void;
 }
 
 export const AssetModal: React.FC<AssetModalProps> = ({
@@ -29,6 +30,7 @@ export const AssetModal: React.FC<AssetModalProps> = ({
   onClose,
   isBookmarked,
   onToggleBookmark,
+  onDownload,
 }) => {
   const [copiedId, setCopiedId] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
@@ -149,6 +151,7 @@ export const AssetModal: React.FC<AssetModalProps> = ({
                 <a
                   href={asset.fileData}
                   download={asset.fileName || `${asset.title.toLowerCase().replace(/[^a-z0-9]/g, '_')}.${asset.format === 'RBXM' ? 'rbxm' : 'zip'}`}
+                  onClick={() => onDownload?.(asset.id)}
                   className="flex items-center justify-center gap-2 w-full rounded-xl border border-white bg-white text-black font-bold py-2.5 px-4 text-xs hover:bg-zinc-200 transition-colors shadow-lg cursor-pointer"
                 >
                   <Download className="h-4 w-4 text-black" />
@@ -159,6 +162,7 @@ export const AssetModal: React.FC<AssetModalProps> = ({
                   href={asset.downloadUrl}
                   target="_blank"
                   rel="noopener noreferrer"
+                  onClick={() => onDownload?.(asset.id)}
                   className="flex items-center justify-center gap-2 w-full rounded-xl border border-border bg-white text-black font-semibold py-2.5 px-4 text-xs hover:bg-zinc-200 transition-colors"
                 >
                   <Download className="h-4 w-4" />
