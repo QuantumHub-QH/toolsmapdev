@@ -46,10 +46,10 @@ An ultra-modern, high-performance developer hub and free resource suite for Robl
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/tools-dev-map.git
+git clone https://github.com/gantengriki023-sudo/TOOLSDEVMAP.git
 
 # Enter the project directory
-cd tools-dev-map
+cd TOOLSDEVMAP
 
 # Install dependencies
 npm install
