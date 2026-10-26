@@ -16,7 +16,7 @@ async function getLiveAssets(): Promise<Asset[]> {
     });
     if (res.ok) {
       const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
+      if (Array.isArray(data)) {
         return data;
       }
     }
@@ -29,7 +29,7 @@ async function getLiveAssets(): Promise<Asset[]> {
     if (fs.existsSync(DATA_FILE_PATH)) {
       const content = fs.readFileSync(DATA_FILE_PATH, 'utf-8');
       const parsed = JSON.parse(content);
-      if (Array.isArray(parsed) && parsed.length > 0) {
+      if (Array.isArray(parsed)) {
         return parsed;
       }
     }
@@ -37,8 +37,7 @@ async function getLiveAssets(): Promise<Asset[]> {
     // ignore and fallback
   }
 
-  // 3. Fallback to initial library
-  return ASSETS_DATA;
+  return [];
 }
 
 export async function GET(request: NextRequest) {
