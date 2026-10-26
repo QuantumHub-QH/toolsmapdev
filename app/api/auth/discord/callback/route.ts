@@ -5,7 +5,7 @@ export async function GET(request: NextRequest) {
   const code = searchParams.get('code');
   const error = searchParams.get('error');
 
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://solusimapbymells.vercel.app';
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://mchlern-git-main-mchlern1.vercel.app';
 
   if (error || !code) {
     // User denied authorization or error
