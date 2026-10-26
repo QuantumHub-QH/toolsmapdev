@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import Link from 'next/link';
 import { Navbar } from '@/components/Navbar';
 import { Hero } from '@/components/Hero';
 import { AssetCard } from '@/components/AssetCard';
@@ -12,7 +11,7 @@ import { BookmarksModal } from '@/components/BookmarksModal';
 import { Footer } from '@/components/Footer';
 import { ASSETS_DATA } from '@/lib/data';
 import { Asset, AssetCategory } from '@/types';
-import { SlidersHorizontal, Sparkles, Box, CheckCircle, PlusCircle } from 'lucide-react';
+import { SlidersHorizontal, Sparkles, Box, CheckCircle } from 'lucide-react';
 
 export default function Home() {
   const [searchQuery, setSearchQuery] = useState('');
@@ -205,17 +204,8 @@ export default function Home() {
                   Belum Ada Produk / Aset
                 </h3>
                 <p className="mt-1.5 text-xs text-zinc-400 max-w-md mx-auto leading-relaxed">
-                  Katalog produk masih kosong. Kamu bisa mulai menambahkan produk pertama (gambar, file, judul, deskripsi) melalui Admin Panel.
+                  Katalog produk sedang dalam pembaruan. Silakan cek kembali nanti.
                 </p>
-                <div className="mt-6 flex items-center justify-center">
-                  <Link
-                    href="/admin"
-                    className="inline-flex items-center gap-2 rounded-xl bg-white px-5 py-2.5 text-xs font-bold font-mono text-black hover:bg-zinc-200 transition-all uppercase shadow-lg"
-                  >
-                    <PlusCircle className="h-4 w-4 text-black" />
-                    <span>Buka Admin Panel (Tambah Produk)</span>
-                  </Link>
-                </div>
               </div>
             ) : (
               <div className="rounded-2xl border border-dashed border-border bg-surface/40 py-16 text-center">

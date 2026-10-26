@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState } from 'react';
-import Link from 'next/link';
 import { 
   Box, 
   Wrench, 
@@ -12,9 +11,7 @@ import {
   Menu, 
   X, 
   Search,
-  ExternalLink,
-  Sparkles,
-  Lock
+  Sparkles
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -137,16 +134,6 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span className="sm:hidden">Submit</span>
           </button>
 
-          {/* Admin Panel Link */}
-          <Link
-            href="/admin"
-            className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-surface px-2.5 py-1.5 text-xs font-mono text-zinc-300 hover:text-white hover:border-zinc-500 transition-colors"
-            title="Admin Panel (Login)"
-          >
-            <Lock className="h-3.5 w-3.5 text-zinc-400" />
-            <span className="hidden lg:inline">Admin</span>
-          </Link>
-
           {/* Mobile Menu Trigger */}
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -183,16 +170,10 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           <div className="pt-2 border-t border-border flex items-center justify-between text-xs text-zinc-400">
-            <Link
-              href="/admin"
-              className="flex items-center gap-1.5 font-mono text-[11px] text-zinc-300 hover:text-white"
-            >
-              <Lock className="h-3 w-3" />
-              <span>Admin Panel</span>
-            </Link>
+            <span className="font-mono text-[11px]">V1.0 • OPEN SOURCE</span>
             <div className="flex items-center gap-1 text-emerald-400">
               <Sparkles className="h-3.5 w-3.5" />
-              <span>Ready for Vercel</span>
+              <span>Free & Open</span>
             </div>
           </div>
         </div>
