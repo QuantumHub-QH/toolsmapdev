@@ -33,6 +33,31 @@ export default function Home() {
   // Load Discord user session or auto-trigger authorize popup
   useEffect(() => {
     try {
+      // Check if returning from Discord OAuth2 callback
+      const urlParams = new URLSearchParams(window.location.search);
+      const discordUserParam = urlParams.get('discord_user');
+      const discordError = urlParams.get('discord_error');
+
+      if (discordUserParam) {
+        // Successfully returned from Discord OAuth2
+        const parsed = JSON.parse(decodeURIComponent(discordUserParam));
+        if (parsed && parsed.isAuthorized) {
+          setDiscordUser(parsed);
+          localStorage.setItem('mapdev_discord_user', JSON.stringify(parsed));
+          showToast(`Welcome, @${parsed.username}! Discord connected ✓`);
+          // Clean up URL params
+          window.history.replaceState({}, '', '/');
+          return;
+        }
+      }
+
+      if (discordError) {
+        // Discord auth failed or denied
+        showToast('Discord auth gagal atau dibatalkan. Coba lagi.');
+        window.history.replaceState({}, '', '/');
+      }
+
+      // Check existing session in localStorage
       const savedUser = localStorage.getItem('mapdev_discord_user');
       if (savedUser) {
         const parsed = JSON.parse(savedUser);
