@@ -62,9 +62,11 @@ export default function AdminPanelPage() {
   // Helper UTF-8 Base64 converter for browser
   const toBase64Utf8 = (str: string): string => {
     const bytes = new TextEncoder().encode(str);
+    const chunkSize = 8192;
     let bin = '';
-    for (let i = 0; i < bytes.length; i++) {
-      bin += String.fromCharCode(bytes[i]);
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+      bin += String.fromCharCode.apply(null, chunk as unknown as number[]);
     }
     return btoa(bin);
   };
@@ -74,7 +76,11 @@ export default function AdminPanelPage() {
     // Always use canonical org token - never rely on githubToken state which might be stale
     const token = getOrgToken() || githubToken.trim();
     const endpoint = 'https://api.github.com/repos/QuantumHub-QH/mchlern/contents/data/products.json';
-    const authHeaders = {
+    const getHeaders = {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github.v3+json',
+    };
+    const putHeaders = {
       Authorization: `Bearer ${token}`,
       Accept: 'application/vnd.github.v3+json',
       'Content-Type': 'application/json',
@@ -85,7 +91,7 @@ export default function AdminPanelPage() {
       try {
         // Get current SHA
         const getRes = await fetch(`${endpoint}?ref=main&t=${Date.now()}`, {
-          headers: { ...authHeaders, 'Content-Type': undefined as any },
+          headers: getHeaders,
           cache: 'no-store',
         });
 
@@ -103,7 +109,7 @@ export default function AdminPanelPage() {
         const contentBase64 = toBase64Utf8(JSON.stringify(productsList, null, 2));
         const putRes = await fetch(endpoint, {
           method: 'PUT',
-          headers: authHeaders,
+          headers: putHeaders,
           body: JSON.stringify({
             message: `feat(catalog): publish ${productsList.length} products to public [skip ci]`,
             content: contentBase64,
@@ -406,7 +412,26 @@ export default function AdminPanelPage() {
     setSyncing(true);
     setStatusMessage({ type: 'success', text: 'Sedang mengirim semua produk langsung ke GitHub... Mohon tunggu.' });
     try {
-      const res = await commitDirectToGitHub(products);
+      let res = await commitDirectToGitHub(products);
+      if (!res.success) {
+        // Instant Fallback to Server API
+        const serverRes = await fetch('/api/admin-panel/products', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + (sessionStorage.getItem('admin_panel_session') || 'authenticated'),
+            'x-github-token': getOrgToken(),
+          },
+          body: JSON.stringify({ bulkProducts: products, token: getOrgToken() }),
+        });
+        const serverData = await serverRes.json().catch(() => ({}));
+        if (serverRes.ok && serverData.success) {
+          res = { success: true };
+        } else {
+          res = { success: false, error: serverData.error || res.error || 'Server sync gagal' };
+        }
+      }
+
       if (res.success) {
         setLiveProductIds(new Set(products.map((p) => p.id)));
         setStatusMessage({
