@@ -1,6 +1,7 @@
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 export const fetchCache = 'force-no-store';
+export const maxDuration = 30;
 
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
@@ -15,7 +16,13 @@ const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
 
 // Helper to read products
 async function getProducts(): Promise<Asset[]> {
-  // 1. Try Firestore Database (Realtime Cloud DB if configured)
+  // GitHub is the canonical catalog because it persists across deployments.
+  try {
+    const ghProducts = await fetchProductsFromGitHub();
+    if (ghProducts.length > 0) return ghProducts;
+  } catch (e) {}
+
+  // Fall back to Firestore if GitHub is unavailable.
   if (db) {
     try {
       const snap = await getDocs(collection(db, 'products'));
@@ -23,26 +30,16 @@ async function getProducts(): Promise<Asset[]> {
         const firestoreList: Asset[] = [];
         snap.forEach((docSnap) => {
           const item = docSnap.data() as Asset;
-          if (item && item.id && item.title) {
-            firestoreList.push(item);
-          }
+          if (item && item.id && item.title) firestoreList.push(item);
         });
-        if (firestoreList.length > 0) {
-          return firestoreList;
-        }
+        if (firestoreList.length > 0) return firestoreList;
       }
     } catch (e) {
       console.warn('Firestore getProducts fallback:', e);
     }
   }
 
-  // 2. Try GitHub REST API (direct, no CDN cache)
-  try {
-    const ghProducts = await fetchProductsFromGitHub();
-    if (ghProducts.length > 0) return ghProducts;
-  } catch (e) {}
-
-  // 3. Fallback to local file
+  // Fall back to the bundled file if cloud sources are unavailable.
   try {
     if (fs.existsSync(DATA_FILE_PATH)) {
       const content = fs.readFileSync(DATA_FILE_PATH, 'utf-8');

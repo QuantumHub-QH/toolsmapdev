@@ -14,28 +14,7 @@ import { getLiveStats } from '@/lib/stats';
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
 
 async function getLiveAssets(): Promise<Asset[]> {
-  // 1. Try reading from Firebase Firestore (only if configured)
-  if (db) {
-    try {
-      const snap = await getDocs(collection(db, 'products'));
-      if (!snap.empty) {
-        const firestoreList: Asset[] = [];
-        snap.forEach((docSnap) => {
-          const item = docSnap.data() as Asset;
-          if (item && item.id && item.title) {
-            firestoreList.push(item);
-          }
-        });
-        if (firestoreList.length > 0) {
-          return firestoreList;
-        }
-      }
-    } catch (e) {
-      console.warn('Firestore getLiveAssets fallback:', e);
-    }
-  }
-
-  // 2. Try reading from GitHub REST API (direct, no CDN cache)
+  // GitHub is the canonical catalog; prefer it over possibly stale Firestore data.
   try {
     const ghProducts = await fetchProductsFromGitHub();
     if (ghProducts.length > 0) {
@@ -45,7 +24,24 @@ async function getLiveAssets(): Promise<Asset[]> {
     console.warn('GitHub getLiveAssets fallback:', e);
   }
 
-  // 3. Try reading from local file system
+  // Fall back to Firestore if GitHub is unavailable.
+  if (db) {
+    try {
+      const snap = await getDocs(collection(db, 'products'));
+      if (!snap.empty) {
+        const firestoreList: Asset[] = [];
+        snap.forEach((docSnap) => {
+          const item = docSnap.data() as Asset;
+          if (item && item.id && item.title) firestoreList.push(item);
+        });
+        if (firestoreList.length > 0) return firestoreList;
+      }
+    } catch (e) {
+      console.warn('Firestore getLiveAssets fallback:', e);
+    }
+  }
+
+  // Fall back to local file system
   try {
     if (fs.existsSync(DATA_FILE_PATH)) {
       const content = fs.readFileSync(DATA_FILE_PATH, 'utf-8');

@@ -16,6 +16,32 @@ export function getGitHubToken(): string {
   return process.env.GITHUB_TOKEN?.trim() || '';
 }
 
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  timeoutMs = 8_000
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(input, { ...init, signal: controller.signal });
+    const body = await response.arrayBuffer();
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`GitHub tidak merespons dalam ${timeoutMs / 1000} detik.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 /**
  * Fetch live products directly from GitHub REST API (no CDN cache delay)
  */
@@ -25,7 +51,7 @@ export async function fetchProductsFromGitHub(): Promise<Asset[]> {
   // 1. First attempt: Direct GitHub API with raw accept (instant, zero CDN cache)
   if (token) {
     try {
-      const res = await fetch(
+      const res = await fetchWithTimeout(
         `https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}?ref=main&t=${Date.now()}`,
         {
           headers: {
@@ -50,7 +76,7 @@ export async function fetchProductsFromGitHub(): Promise<Asset[]> {
 
   // 2. Second attempt: GitHub Raw CDN fallback
   try {
-    const rawRes = await fetch(`${GITHUB_RAW_URL}?t=${Date.now()}`, {
+    const rawRes = await fetchWithTimeout(`${GITHUB_RAW_URL}?t=${Date.now()}`, {
       cache: 'no-store',
       headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' },
     });
@@ -89,7 +115,7 @@ export async function commitProductsToGitHub(
 
   // Helper function to attempt write with current SHA
   async function attemptWrite(): Promise<{ success: boolean; message: string; status?: number }> {
-    const getRes = await fetch(endpoint, {
+    const getRes = await fetchWithTimeout(endpoint, {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: 'application/vnd.github.v3+json',
@@ -102,9 +128,16 @@ export async function commitProductsToGitHub(
     if (getRes.ok) {
       const data = await getRes.json();
       sha = data.sha;
+    } else if (getRes.status !== 404) {
+      const err = ((await getRes.json().catch(() => ({}))) as any) || {};
+      return {
+        success: false,
+        message: err.message || `Gagal membaca katalog GitHub (HTTP ${getRes.status}).`,
+        status: getRes.status,
+      };
     }
 
-    const putRes = await fetch(endpoint, {
+    const putRes = await fetchWithTimeout(endpoint, {
       method: 'PUT',
       headers: {
         Authorization: `Bearer ${token}`,

@@ -26,6 +26,7 @@ import {
 import { Asset, AssetCategory, AssetFormat } from '@/types';
 
 const MAX_PUBLISH_REQUEST_BYTES = 3 * 1024 * 1024;
+const PUBLISH_REQUEST_TIMEOUT_MS = 35_000;
 
 function createPublishBatches(products: Asset[]): Asset[][] {
   const batches: Asset[][] = [];
@@ -50,6 +51,37 @@ function createPublishBatches(products: Asset[]): Asset[][] {
 
   if (batch.length > 0) batches.push(batch);
   return batches;
+}
+
+async function publishRequest(
+  payload: { product: Record<string, unknown> } | { bulkProducts: Asset[] },
+  sessionToken: string | null
+): Promise<void> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), PUBLISH_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch('/api/admin-panel/products', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    const data: { success?: boolean; error?: string } = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || `Server menolak publish (HTTP ${response.status}).`);
+    }
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error('Server belum merespons setelah 35 detik. Periksa status produk sebelum mencoba publish ulang.');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export default function AdminPanelPage() {
@@ -309,18 +341,7 @@ export default function AdminPanelPage() {
           type: 'success',
           text: `Mem-publish batch ${index + 1} dari ${batches.length}...`,
         });
-        const response = await fetch('/api/admin-panel/products', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
-          },
-          body: JSON.stringify({ bulkProducts: batch }),
-        });
-        const serverData = await response.json().catch(() => ({}));
-        if (!response.ok || !serverData.success) {
-          throw new Error(serverData.error || `Server menolak publish (HTTP ${response.status}).`);
-        }
+        await publishRequest({ bulkProducts: batch }, sessionToken);
 
         setLiveProductIds((current) => new Set([
           ...current,
@@ -346,7 +367,7 @@ export default function AdminPanelPage() {
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     setSyncing(true);
-    setStatusMessage(null);
+    setStatusMessage({ type: 'success', text: 'Sedang mengirim produk ke server untuk dipublikasikan...' });
 
     const tagsArray = tagsInput
       .split(',')
@@ -404,18 +425,7 @@ export default function AdminPanelPage() {
 
     try {
       const sessionToken = sessionStorage.getItem('admin_panel_session');
-      const response = await fetch('/api/admin-panel/products', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
-        },
-        body: requestBody,
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || `Server menolak publish (HTTP ${response.status}).`);
-      }
+      await publishRequest({ product: productPayload }, sessionToken);
 
       setLiveProductIds((current) => new Set([...current, formattedLocal.id]));
       setStatusMessage({
