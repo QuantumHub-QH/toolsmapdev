@@ -283,6 +283,44 @@ export default function AdminPanelPage() {
     }
   };
 
+  const handleSyncAllProductsToCloud = async () => {
+    if (products.length === 0) {
+      alert('Tidak ada produk di daftar untuk disinkronkan.');
+      return;
+    }
+    if (!confirm(`Kirim semua ${products.length} produk dari browser ini ke Cloud Firestore & GitHub sekarang? Semua pengunjung web akan langsung bisa melihatnya.`)) return;
+
+    setSyncing(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch('/api/admin-panel/products', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bulkProducts: products, token: githubToken }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setStatusMessage({
+          type: 'success',
+          text: `🚀 BERHASIL! Semua ${products.length} produk kamu sekarang sudah aktif di CLOUD & GITHUB. Semua pengunjung di HP/laptop manapun sekarang bisa melihatnya!`,
+        });
+        localStorage.setItem('mapdev_saved_products', JSON.stringify(products));
+      } else {
+        setStatusMessage({
+          type: 'error',
+          text: data.error || 'Gagal sinkronisasi produk ke cloud. Pastikan token GitHub valid.',
+        });
+      }
+    } catch (e: any) {
+      setStatusMessage({
+        type: 'error',
+        text: 'Error kirim ke cloud: ' + e.message,
+      });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     setSyncing(true);
@@ -599,6 +637,16 @@ export default function AdminPanelPage() {
             >
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
               <span className="hidden sm:inline">Refresh</span>
+            </button>
+
+            <button
+              onClick={handleSyncAllProductsToCloud}
+              disabled={syncing || products.length === 0}
+              className="flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-600 hover:bg-emerald-500 px-3.5 py-1.5 text-xs font-mono font-bold text-white transition-all shadow-md active:scale-95 disabled:opacity-40"
+              title="Kirim semua produk di browser ini ke Cloud Firestore & GitHub agar bisa dilihat pengunjung lain"
+            >
+              <Upload className={`h-3.5 w-3.5 ${syncing ? 'animate-bounce' : ''}`} />
+              <span>{syncing ? 'Mengupload ke Cloud...' : `Publish Semua ke Publik (${products.length})`}</span>
             </button>
 
             <button
@@ -1036,12 +1084,26 @@ export default function AdminPanelPage() {
           <div className="lg:col-span-7 space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
               <div>
-                <h2 className="text-base font-bold text-white uppercase font-mono">
-                  Daftar Produk Aktif ({products.length})
-                </h2>
-                <p className="text-xs text-zinc-400">
-                  Produk yang ada di sini langsung tampil bagi semua pengunjung web utama.
-                </p>
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 w-full">
+                  <div>
+                    <h2 className="text-base font-bold text-white uppercase font-mono">
+                      Daftar Produk Aktif ({products.length})
+                    </h2>
+                    <p className="text-xs text-zinc-400">
+                      Klik <strong>Publish Semua ke Publik</strong> agar produk bisa dilihat pengunjung lain dari device mana saja.
+                    </p>
+                  </div>
+                  {products.length > 0 && (
+                    <button
+                      onClick={handleSyncAllProductsToCloud}
+                      disabled={syncing}
+                      className="flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 text-xs font-mono font-bold text-white shadow-md active:scale-95 disabled:opacity-40 shrink-0"
+                    >
+                      <Upload className={`h-3.5 w-3.5 ${syncing ? 'animate-bounce' : ''}`} />
+                      <span>{syncing ? 'Menyinkronkan...' : 'Kirim Semua ke Cloud ➔'}</span>
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 

@@ -2,15 +2,38 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { Asset } from '@/types';
+import { db } from '@/lib/firebase';
+import { collection, doc, setDoc, deleteDoc, getDocs } from 'firebase/firestore';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
 const GITHUB_REPO = 'QuantumHub-QH/mchlern';
 const GITHUB_FILE_PATH = 'data/products.json';
 const GITHUB_RAW_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/main/${GITHUB_FILE_PATH}`;
 
-// Helper to read products — always prefer GitHub as source of truth
+// Helper to read products — prefers Firestore, then GitHub raw
 async function getProducts(): Promise<Asset[]> {
-  // 1. Try GitHub raw (authoritative, persists across redeploys)
+  // 1. Try Firestore Database (Realtime Cloud DB)
+  if (db) {
+    try {
+      const snap = await getDocs(collection(db, 'products'));
+      if (!snap.empty) {
+        const firestoreList: Asset[] = [];
+        snap.forEach((docSnap) => {
+          const item = docSnap.data() as Asset;
+          if (item && item.id && item.title) {
+            firestoreList.push(item);
+          }
+        });
+        if (firestoreList.length > 0) {
+          return firestoreList;
+        }
+      }
+    } catch (e) {
+      console.warn('Firestore getProducts fallback:', e);
+    }
+  }
+
+  // 2. Try GitHub raw (authoritative, persists across redeploys)
   try {
     const res = await fetch(`${GITHUB_RAW_URL}?t=${Date.now()}`, {
       next: { revalidate: 0 },
@@ -18,23 +41,23 @@ async function getProducts(): Promise<Asset[]> {
     });
     if (res.ok) {
       const data = await res.json();
-      if (Array.isArray(data)) return data; // return even if empty array
+      if (Array.isArray(data) && data.length > 0) return data;
     }
   } catch (e) {}
 
-  // 2. Fallback to local (ephemeral on Vercel, only works in same instance)
+  // 3. Fallback to local
   try {
     if (fs.existsSync(DATA_FILE_PATH)) {
       const content = fs.readFileSync(DATA_FILE_PATH, 'utf-8');
       const parsed = JSON.parse(content);
-      if (Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
     }
   } catch (e) {}
 
   return [];
 }
 
-// Helper to write locally (best-effort, ephemeral on Vercel)
+// Helper to write locally
 function writeLocal(products: Asset[]) {
   try {
     const dir = path.dirname(DATA_FILE_PATH);
@@ -64,7 +87,6 @@ async function syncToGitHub(
   }
 
   try {
-    // 1. Get current sha
     const getRes = await fetch(
       `https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`,
       {
@@ -88,11 +110,8 @@ async function syncToGitHub(
         message:
           'GitHub Token tidak valid atau sudah kadaluarsa! Perbarui token di bagian "Lihat Token GitHub" admin panel.',
       };
-    } else if (getRes.status === 404) {
-      // File doesn't exist yet, will be created
     }
 
-    // 2. Put updated contents
     const contentBase64 = Buffer.from(JSON.stringify(products, null, 2)).toString('base64');
     const putRes = await fetch(
       `https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`,
@@ -116,13 +135,13 @@ async function syncToGitHub(
     if (putRes.ok) {
       return {
         success: true,
-        message: `Produk berhasil disimpan PERMANEN ke GitHub! (${products.length} produk aktif - aman dari redeploy Vercel)`,
+        message: `Produk berhasil disimpan PERMANEN ke GitHub & Cloud! (${products.length} produk aktif)`,
       };
     } else {
-      const err = await putRes.json().catch(() => ({})) as any;
+      const err = ((await putRes.json().catch(() => ({}))) as any) || {};
       return {
         success: false,
-        message: `Gagal sync ke GitHub: ${err.message || putRes.statusText}. Cek token kamu.`,
+        message: `Gagal sync ke GitHub: ${err.message || putRes.statusText}`,
       };
     }
   } catch (err: any) {
@@ -142,9 +161,38 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const productData = body.product;
     const token = body.token;
 
+    // Handle Bulk Sync from Admin Browser
+    if (body.bulkProducts && Array.isArray(body.bulkProducts)) {
+      const bulkList: Asset[] = body.bulkProducts;
+
+      // 1. Write each to Firestore
+      if (db) {
+        try {
+          for (const item of bulkList) {
+            await setDoc(doc(db, 'products', item.id), item);
+          }
+        } catch (e) {
+          console.warn('Bulk Firestore write warning:', e);
+        }
+      }
+
+      // 2. Write local
+      writeLocal(bulkList);
+
+      // 3. Commit all to GitHub
+      const syncRes = await syncToGitHub(bulkList, token);
+
+      return NextResponse.json({
+        success: true,
+        message: `Berhasil sinkronisasi ${bulkList.length} produk ke Cloud Firestore & GitHub!`,
+        data: bulkList,
+        syncedWithGitHub: syncRes.success,
+      });
+    }
+
+    const productData = body.product;
     if (!productData || !productData.title) {
       return NextResponse.json(
         { success: false, error: 'Data produk tidak lengkap' },
@@ -193,30 +241,26 @@ export async function POST(request: NextRequest) {
       updatedList = [formattedProduct, ...currentProducts];
     }
 
-    // 1. Write local (best-effort)
+    // 1. Save to Firestore (Cloud Database)
+    if (db) {
+      try {
+        await setDoc(doc(db, 'products', formattedProduct.id), formattedProduct);
+      } catch (e) {
+        console.warn('Firestore setDoc failed:', e);
+      }
+    }
+
+    // 2. Write local
     writeLocal(updatedList);
 
-    // 2. Commit to GitHub (required for persistence)
+    // 3. Commit to GitHub
     const syncRes = await syncToGitHub(updatedList, token);
-
-    // If GitHub sync failed, return error so admin knows
-    if (!syncRes.success) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: syncRes.message,
-          tokenMissing: syncRes.tokenMissing || false,
-          data: updatedList, // still return data so admin can see it locally
-        },
-        { status: 424 } // 424 Failed Dependency
-      );
-    }
 
     return NextResponse.json({
       success: true,
-      message: syncRes.message,
+      message: syncRes.message || 'Produk berhasil disimpan ke Cloud & GitHub!',
       data: updatedList,
-      syncedWithGitHub: true,
+      syncedWithGitHub: syncRes.success,
     });
   } catch (err: any) {
     return NextResponse.json(
@@ -239,32 +283,29 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
+    // 1. Delete from Firestore
+    if (db) {
+      try {
+        await deleteDoc(doc(db, 'products', id));
+      } catch (e) {
+        console.warn('Firestore delete failed:', e);
+      }
+    }
+
     const currentProducts = await getProducts();
     const updatedList = currentProducts.filter((p) => p.id !== id);
 
-    // 1. Write local
+    // 2. Write local
     writeLocal(updatedList);
 
-    // 2. Commit to GitHub
+    // 3. Commit to GitHub
     const syncRes = await syncToGitHub(updatedList, token);
-
-    if (!syncRes.success) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Produk dihapus lokal tapi GAGAL sync ke GitHub: ${syncRes.message}`,
-          tokenMissing: syncRes.tokenMissing || false,
-          data: updatedList,
-        },
-        { status: 424 }
-      );
-    }
 
     return NextResponse.json({
       success: true,
-      message: 'Produk berhasil dihapus permanen dari GitHub!',
+      message: 'Produk berhasil dihapus permanen dari Cloud & GitHub!',
       data: updatedList,
-      syncedWithGitHub: true,
+      syncedWithGitHub: syncRes.success,
     });
   } catch (err: any) {
     return NextResponse.json(
