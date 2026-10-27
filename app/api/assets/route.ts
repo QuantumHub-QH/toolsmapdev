@@ -4,13 +4,12 @@ import path from 'path';
 import { Asset, AssetCategory } from '@/types';
 import { db } from '@/lib/firebase';
 import { collection, getDocs } from 'firebase/firestore';
+import { fetchProductsFromGitHub } from '@/lib/github';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
-const GITHUB_RAW_URL =
-  'https://raw.githubusercontent.com/QuantumHub-QH/mchlern/main/data/products.json';
 
 async function getLiveAssets(): Promise<Asset[]> {
-  // 1. Try reading from Firebase Firestore (Cloud Database)
+  // 1. Try reading from Firebase Firestore (only if configured)
   if (db) {
     try {
       const snap = await getDocs(collection(db, 'products'));
@@ -31,20 +30,14 @@ async function getLiveAssets(): Promise<Asset[]> {
     }
   }
 
-  // 2. Try reading from GitHub raw URL (most up-to-date across serverless instances)
+  // 2. Try reading from GitHub REST API (direct, no CDN cache)
   try {
-    const res = await fetch(`${GITHUB_RAW_URL}?t=${Date.now()}`, {
-      next: { revalidate: 0 },
-      headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' },
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        return data;
-      }
+    const ghProducts = await fetchProductsFromGitHub();
+    if (ghProducts.length > 0) {
+      return ghProducts;
     }
   } catch (e) {
-    // ignore and fallback
+    console.warn('GitHub getLiveAssets fallback:', e);
   }
 
   // 3. Try reading from local file system
@@ -56,88 +49,46 @@ async function getLiveAssets(): Promise<Asset[]> {
         return parsed;
       }
     }
-  } catch (e) {
-    // ignore and fallback
-  }
+  } catch (e) {}
 
   return [];
 }
 
 export async function GET(request: NextRequest) {
-  try {
-    const { searchParams } = new URL(request.url);
-    const category = searchParams.get('category') as AssetCategory | null;
-    const search = searchParams.get('search')?.toLowerCase() || '';
-    const tag = searchParams.get('tag')?.toLowerCase();
+  const { searchParams } = new URL(request.url);
+  const category = searchParams.get('category');
+  const search = searchParams.get('search')?.toLowerCase();
 
-    const assets = await getLiveAssets();
-    let filtered = [...assets];
+  const allAssets = await getLiveAssets();
 
-    if (category && category !== 'all') {
-      filtered = filtered.filter((item) => item.category === category);
-    }
+  let filtered = allAssets;
 
-    if (tag) {
-      filtered = filtered.filter((item) => item.tags && item.tags.includes(tag));
-    }
+  if (category && category !== 'all') {
+    filtered = filtered.filter(
+      (asset) => asset.category.toLowerCase() === category.toLowerCase()
+    );
+  }
 
-    if (search) {
-      filtered = filtered.filter(
-        (item) =>
-          item.title.toLowerCase().includes(search) ||
-          item.description.toLowerCase().includes(search) ||
-          (item.tags && item.tags.some((t) => t.toLowerCase().includes(search))) ||
-          (item.creator && item.creator.name.toLowerCase().includes(search))
-      );
-    }
+  if (search) {
+    filtered = filtered.filter(
+      (asset) =>
+        asset.title.toLowerCase().includes(search) ||
+        asset.description.toLowerCase().includes(search) ||
+        asset.tags.some((tag) => tag.toLowerCase().includes(search))
+    );
+  }
 
-    return NextResponse.json({
+  return NextResponse.json(
+    {
       success: true,
-      total: filtered.length,
       data: filtered,
-    });
-  } catch (error) {
-    return NextResponse.json(
-      { success: false, error: 'Failed to fetch assets' },
-      { status: 500 }
-    );
-  }
-}
-
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-
-    if (!body.title || !body.category || !body.creatorName) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required fields (title, category, creatorName)' },
-        { status: 400 }
-      );
-    }
-
-    const newSubmission = {
-      id: `custom-${Date.now()}`,
-      title: body.title,
-      category: body.category,
-      description: body.description || '',
-      assetIdOrUrl: body.assetIdOrUrl || '',
-      creatorName: body.creatorName,
-      status: 'pending_review',
-      submittedAt: new Date().toISOString(),
-    };
-
-    return NextResponse.json(
-      {
-        success: true,
-        message: 'Asset submitted successfully! Pending verification by community moderators.',
-        data: newSubmission,
+      total: filtered.length,
+      timestamp: Date.now(),
+    },
+    {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
       },
-      { status: 201 }
-    );
-  } catch (error) {
-    return NextResponse.json(
-      { success: false, error: 'Failed to process submission' },
-      { status: 500 }
-    );
-  }
+    }
+  );
 }

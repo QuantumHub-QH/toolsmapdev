@@ -2,29 +2,25 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { Asset } from '@/types';
+import { db } from '@/lib/firebase';
+import { doc, updateDoc, increment } from 'firebase/firestore';
+import { fetchProductsFromGitHub, commitProductsToGitHub } from '@/lib/github';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
-const GITHUB_REPO = 'QuantumHub-QH/mchlern';
-const GITHUB_FILE_PATH = 'data/products.json';
-const GITHUB_RAW_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/main/${GITHUB_FILE_PATH}`;
 
 async function getLiveProducts(): Promise<Asset[]> {
+  // 1. Try direct GitHub API (live, uncached)
+  try {
+    const gh = await fetchProductsFromGitHub();
+    if (gh.length > 0) return gh;
+  } catch (e) {}
+
+  // 2. Try local file
   try {
     if (fs.existsSync(DATA_FILE_PATH)) {
       const content = fs.readFileSync(DATA_FILE_PATH, 'utf-8');
       const parsed = JSON.parse(content);
       if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch (e) {}
-
-  try {
-    const res = await fetch(`${GITHUB_RAW_URL}?t=${Date.now()}`, {
-      next: { revalidate: 0 },
-      headers: { 'Cache-Control': 'no-cache' },
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data)) return data;
     }
   } catch (e) {}
 
@@ -35,12 +31,23 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const assetId = body.id;
-    const clientToken = body.token || request.headers.get('x-github-token') || process.env.GITHUB_TOKEN;
 
     if (!assetId) {
       return NextResponse.json({ success: false, error: 'Asset ID diperlukan' }, { status: 400 });
     }
 
+    // 1. Update Firestore if configured
+    if (db) {
+      try {
+        await updateDoc(doc(db, 'products', assetId), {
+          'stats.downloads': increment(1),
+        });
+      } catch (e) {
+        console.warn('Firestore download increment warning:', e);
+      }
+    }
+
+    // 2. Read current products and update local & GitHub
     const products = await getLiveProducts();
     let updatedAsset: Asset | null = null;
 
@@ -59,55 +66,26 @@ export async function POST(request: NextRequest) {
       return item;
     });
 
-    // Write locally
+    // 3. Write locally
     try {
       const dir = path.dirname(DATA_FILE_PATH);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(DATA_FILE_PATH, JSON.stringify(updatedProducts, null, 2), 'utf-8');
-    } catch (e) {
-      // serverless read-only fallback
-    }
+    } catch (e) {}
 
-    // Background sync to GitHub if token available
-    if (clientToken) {
-      try {
-        const getRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`, {
-          headers: {
-            Authorization: `Bearer ${clientToken}`,
-            Accept: 'application/vnd.github.v3+json',
-            'User-Agent': 'MapDev-Downloader',
-          },
-          cache: 'no-store',
-        });
+    // 4. Asynchronously commit incremented count to GitHub
+    commitProductsToGitHub(
+      updatedProducts,
+      undefined,
+      `chore(downloads): increment download count for asset ${assetId} [skip ci]`
+    ).catch((err) => {
+      console.warn('Failed background GitHub download commit:', err);
+    });
 
-        let sha: string | undefined = undefined;
-        if (getRes.ok) {
-          const fileData = await getRes.json();
-          sha = fileData.sha;
-        }
-
-        const contentBase64 = Buffer.from(JSON.stringify(updatedProducts, null, 2)).toString('base64');
-        await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`, {
-          method: 'PUT',
-          headers: {
-            Authorization: `Bearer ${clientToken}`,
-            Accept: 'application/vnd.github.v3+json',
-            'Content-Type': 'application/json',
-            'User-Agent': 'MapDev-Downloader',
-          },
-          body: JSON.stringify({
-            message: `chore: increment download count for asset ${assetId} [skip ci]`,
-            content: contentBase64,
-            sha,
-            branch: 'main',
-          }),
-        });
-      } catch (err) {
-        console.error('Failed to commit download increment to GitHub:', err);
-      }
-    }
-
-    const totalDownloads = updatedProducts.reduce((acc, curr) => acc + (curr.stats?.downloads || 0), 0);
+    const totalDownloads = updatedProducts.reduce(
+      (acc, curr) => acc + (curr.stats?.downloads || 0),
+      0
+    );
 
     return NextResponse.json({
       success: true,

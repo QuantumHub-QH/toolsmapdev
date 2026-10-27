@@ -4,15 +4,13 @@ import path from 'path';
 import { Asset } from '@/types';
 import { db } from '@/lib/firebase';
 import { collection, doc, setDoc, deleteDoc, getDocs } from 'firebase/firestore';
+import { fetchProductsFromGitHub, commitProductsToGitHub } from '@/lib/github';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
-const GITHUB_REPO = 'QuantumHub-QH/mchlern';
-const GITHUB_FILE_PATH = 'data/products.json';
-const GITHUB_RAW_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/main/${GITHUB_FILE_PATH}`;
 
-// Helper to read products — prefers Firestore, then GitHub raw
+// Helper to read products
 async function getProducts(): Promise<Asset[]> {
-  // 1. Try Firestore Database (Realtime Cloud DB)
+  // 1. Try Firestore Database (Realtime Cloud DB if configured)
   if (db) {
     try {
       const snap = await getDocs(collection(db, 'products'));
@@ -33,19 +31,13 @@ async function getProducts(): Promise<Asset[]> {
     }
   }
 
-  // 2. Try GitHub raw (authoritative, persists across redeploys)
+  // 2. Try GitHub REST API (direct, no CDN cache)
   try {
-    const res = await fetch(`${GITHUB_RAW_URL}?t=${Date.now()}`, {
-      next: { revalidate: 0 },
-      headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' },
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) return data;
-    }
+    const ghProducts = await fetchProductsFromGitHub();
+    if (ghProducts.length > 0) return ghProducts;
   } catch (e) {}
 
-  // 3. Fallback to local
+  // 3. Fallback to local file
   try {
     if (fs.existsSync(DATA_FILE_PATH)) {
       const content = fs.readFileSync(DATA_FILE_PATH, 'utf-8');
@@ -57,7 +49,7 @@ async function getProducts(): Promise<Asset[]> {
   return [];
 }
 
-// Helper to write locally
+// Helper to write locally (best-effort)
 function writeLocal(products: Asset[]) {
   try {
     const dir = path.dirname(DATA_FILE_PATH);
@@ -66,86 +58,7 @@ function writeLocal(products: Asset[]) {
     }
     fs.writeFileSync(DATA_FILE_PATH, JSON.stringify(products, null, 2), 'utf-8');
   } catch (e) {
-    console.error('Local write ignored (serverless):', e);
-  }
-}
-
-// Helper to commit to GitHub repo for permanent persistence
-async function syncToGitHub(
-  products: Asset[],
-  token?: string
-): Promise<{ success: boolean; message: string; tokenMissing?: boolean }> {
-  const ghToken = token || process.env.GITHUB_TOKEN;
-
-  if (!ghToken || ghToken.trim() === '') {
-    return {
-      success: false,
-      tokenMissing: true,
-      message:
-        'GitHub Token tidak ditemukan! Buka "Lihat Token GitHub" di admin panel dan masukkan token kamu, atau tambahkan GITHUB_TOKEN di Vercel Environment Variables.',
-    };
-  }
-
-  try {
-    const getRes = await fetch(
-      `https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`,
-      {
-        headers: {
-          Authorization: `Bearer ${ghToken}`,
-          Accept: 'application/vnd.github.v3+json',
-          'User-Agent': 'ToolsDevMap-Admin',
-        },
-        cache: 'no-store',
-      }
-    );
-
-    let sha: string | undefined = undefined;
-    if (getRes.ok) {
-      const fileData = await getRes.json();
-      sha = fileData.sha;
-    } else if (getRes.status === 401) {
-      return {
-        success: false,
-        tokenMissing: true,
-        message:
-          'GitHub Token tidak valid atau sudah kadaluarsa! Perbarui token di bagian "Lihat Token GitHub" admin panel.',
-      };
-    }
-
-    const contentBase64 = Buffer.from(JSON.stringify(products, null, 2)).toString('base64');
-    const putRes = await fetch(
-      `https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`,
-      {
-        method: 'PUT',
-        headers: {
-          Authorization: `Bearer ${ghToken}`,
-          Accept: 'application/vnd.github.v3+json',
-          'Content-Type': 'application/json',
-          'User-Agent': 'ToolsDevMap-Admin',
-        },
-        body: JSON.stringify({
-          message: `chore: update products catalog (${products.length} items) [skip ci]`,
-          content: contentBase64,
-          sha,
-          branch: 'main',
-        }),
-      }
-    );
-
-    if (putRes.ok) {
-      return {
-        success: true,
-        message: `Produk berhasil disimpan PERMANEN ke GitHub & Cloud! (${products.length} produk aktif)`,
-      };
-    } else {
-      const err = ((await putRes.json().catch(() => ({}))) as any) || {};
-      return {
-        success: false,
-        message: `Gagal sync ke GitHub: ${err.message || putRes.statusText}`,
-      };
-    }
-  } catch (err: any) {
-    return { success: false, message: `Error GitHub API: ${err.message}` };
+    // Ignored in serverless read-only
   }
 }
 
@@ -153,21 +66,26 @@ export async function GET() {
   const products = await getProducts();
   return NextResponse.json({
     success: true,
-    total: products.length,
     data: products,
+    count: products.length,
+    timestamp: Date.now(),
+  }, {
+    headers: {
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+    },
   });
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const token = body.token;
+    const token = body.token || request.headers.get('x-github-token');
 
     // Handle Bulk Sync from Admin Browser
     if (body.bulkProducts && Array.isArray(body.bulkProducts)) {
       const bulkList: Asset[] = body.bulkProducts;
 
-      // 1. Write each to Firestore
+      // 1. Write each to Firestore if configured
       if (db) {
         try {
           for (const item of bulkList) {
@@ -182,11 +100,15 @@ export async function POST(request: NextRequest) {
       writeLocal(bulkList);
 
       // 3. Commit all to GitHub
-      const syncRes = await syncToGitHub(bulkList, token);
+      const syncRes = await commitProductsToGitHub(
+        bulkList,
+        token,
+        `feat(catalog): bulk publish ${bulkList.length} products to public catalog [skip ci]`
+      );
 
       return NextResponse.json({
         success: true,
-        message: `Berhasil sinkronisasi ${bulkList.length} produk ke Cloud Firestore & GitHub!`,
+        message: `Berhasil sinkronisasi ${bulkList.length} produk ke publik!`,
         data: bulkList,
         syncedWithGitHub: syncRes.success,
       });
@@ -200,48 +122,65 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Read current catalog from GitHub/local
     const currentProducts = await getProducts();
-    const existingIndex = currentProducts.findIndex((p) => p.id === productData.id);
+
+    // Merge map: current server products + client's active products (prevents accidental wiping)
+    const productMap = new Map<string, Asset>();
+    for (const p of currentProducts) {
+      if (p && p.id) productMap.set(p.id, p);
+    }
+
+    if (Array.isArray(body.clientProducts)) {
+      for (const cp of body.clientProducts) {
+        if (cp && cp.id) productMap.set(cp.id, cp);
+      }
+    }
+
+    const existingProduct = productMap.get(productData.id);
 
     const nowIso = new Date().toISOString();
     const formattedProduct: Asset = {
       id: productData.id || `asset-${Date.now()}`,
-      title: productData.title,
-      description: productData.description || '',
-      category: productData.category || 'layout-map',
-      subcategory: productData.subcategory || 'General',
+      title: productData.title.trim(),
+      description: productData.description.trim(),
+      category: productData.category,
+      subcategory: productData.subcategory?.trim() || 'General',
       format: productData.format || 'RBXM',
-      thumbnail:
-        productData.thumbnail ||
-        'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80',
+      thumbnail: productData.thumbnail || 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80',
       fileName: productData.fileName,
       fileData: productData.fileData,
-      robloxAssetId: productData.robloxAssetId,
-      downloadUrl: productData.downloadUrl,
-      luauCode: productData.luauCode,
+      robloxAssetId: productData.robloxAssetId?.trim(),
+      downloadUrl: productData.downloadUrl?.trim(),
+      luauCode: productData.luauCode?.trim(),
       fileSize: productData.fileSize || '1.0 MB',
       creator: {
-        name: productData.creatorName || 'Admin Riki',
+        name: productData.creatorName || productData.creator?.name || 'Admin Riki',
+        avatar: productData.creator?.avatar,
         verified: true,
       },
-      stats:
-        existingIndex >= 0
-          ? currentProducts[existingIndex].stats
-          : { downloads: 0, favorites: 0, views: 1 },
-      license: productData.license || 'Free Community Asset',
-      tags: productData.tags || ['free', 'roblox'],
+      tags: Array.isArray(productData.tags) && productData.tags.length > 0
+        ? productData.tags
+        : ['free', 'dev'],
+      stats: existingProduct?.stats
+        ? existingProduct.stats
+        : { downloads: 0, favorites: 0, views: 1 },
       updatedAt: nowIso,
+      license: productData.license || 'Free Community Asset',
     };
 
-    let updatedList: Asset[];
-    if (existingIndex >= 0) {
-      updatedList = [...currentProducts];
-      updatedList[existingIndex] = formattedProduct;
-    } else {
-      updatedList = [formattedProduct, ...currentProducts];
-    }
+    // Insert or update in map
+    productMap.set(formattedProduct.id, formattedProduct);
 
-    // 1. Save to Firestore (Cloud Database)
+    // Turn map into list (newest first or preserving order)
+    const updatedList = Array.from(productMap.values());
+    // Ensure the new/updated product is prominent
+    const finalList = [
+      formattedProduct,
+      ...updatedList.filter((p) => p.id !== formattedProduct.id),
+    ];
+
+    // 1. Save to Firestore if configured
     if (db) {
       try {
         await setDoc(doc(db, 'products', formattedProduct.id), formattedProduct);
@@ -251,20 +190,24 @@ export async function POST(request: NextRequest) {
     }
 
     // 2. Write local
-    writeLocal(updatedList);
+    writeLocal(finalList);
 
     // 3. Commit to GitHub
-    const syncRes = await syncToGitHub(updatedList, token);
+    const syncRes = await commitProductsToGitHub(
+      finalList,
+      token,
+      `feat(catalog): add/update "${formattedProduct.title}" [skip ci]`
+    );
 
     return NextResponse.json({
       success: true,
       message: syncRes.message || 'Produk berhasil disimpan ke Cloud & GitHub!',
-      data: updatedList,
+      data: finalList,
       syncedWithGitHub: syncRes.success,
     });
   } catch (err: any) {
     return NextResponse.json(
-      { success: false, error: err.message || 'Gagal menyimpan produk' },
+      { success: false, error: err.message || 'Internal Server Error' },
       { status: 500 }
     );
   }
@@ -274,16 +217,16 @@ export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
-    const token = request.headers.get('x-github-token') || undefined;
+    const token = searchParams.get('token') || request.headers.get('x-github-token');
 
     if (!id) {
       return NextResponse.json(
-        { success: false, error: 'ID produk tidak ditemukan' },
+        { success: false, error: 'Product ID required' },
         { status: 400 }
       );
     }
 
-    // 1. Delete from Firestore
+    // 1. Delete from Firestore if configured
     if (db) {
       try {
         await deleteDoc(doc(db, 'products', id));
@@ -299,7 +242,8 @@ export async function DELETE(request: NextRequest) {
     writeLocal(updatedList);
 
     // 3. Commit to GitHub
-    const syncRes = await syncToGitHub(updatedList, token);
+    const syncRes = await commitProductsToGitHub(updatedList, token || undefined, `chore(catalog): delete asset ${id} [skip ci]`
+    );
 
     return NextResponse.json({
       success: true,
@@ -309,7 +253,7 @@ export async function DELETE(request: NextRequest) {
     });
   } catch (err: any) {
     return NextResponse.json(
-      { success: false, error: err.message || 'Gagal menghapus produk' },
+      { success: false, error: err.message || 'Internal Server Error' },
       { status: 500 }
     );
   }

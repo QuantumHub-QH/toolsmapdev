@@ -202,8 +202,39 @@ export default function Home() {
         if (json.success && Array.isArray(json.data) && json.data.length > 0) {
           const cleanData = json.data.filter((a: Asset) => !deletedIds.includes(a.id));
           if (cleanData.length > 0) {
-            setAssetsList(cleanData);
-            localStorage.setItem('mapdev_saved_products', JSON.stringify(cleanData));
+            // Read local saved products to retain any download count or un-synced product
+            let localCache: Asset[] = [];
+            try {
+              const localRaw = localStorage.getItem('mapdev_saved_products');
+              if (localRaw) localCache = JSON.parse(localRaw);
+            } catch (e) {}
+
+            // Merge server data with local download counts so downloads NEVER reset to 0
+            const merged = cleanData.map((item: Asset) => {
+              const trackedDl = parseInt(localStorage.getItem(`mapdev_dl_${item.id}`) || '0', 10);
+              const localItem = localCache.find((lc) => lc.id === item.id);
+              const localDl = localItem?.stats?.downloads || 0;
+              const serverDl = item.stats?.downloads || 0;
+              const maxDl = Math.max(trackedDl, localDl, serverDl);
+
+              return {
+                ...item,
+                stats: {
+                  ...item.stats,
+                  downloads: maxDl,
+                },
+              };
+            });
+
+            // Also keep any local products not yet in server
+            for (const lp of localCache) {
+              if (lp && lp.id && !deletedIds.includes(lp.id) && !merged.some((m: Asset) => m.id === lp.id)) {
+                merged.push(lp);
+              }
+            }
+
+            setAssetsList(merged);
+            localStorage.setItem('mapdev_saved_products', JSON.stringify(merged));
             return;
           }
         }
@@ -225,15 +256,22 @@ export default function Home() {
 
   // Real-time download handler
   const handleDownload = (assetId: string) => {
+    // 1. Increment in standalone local storage key so it NEVER resets on redeploy or refresh
+    const currentTracked = parseInt(localStorage.getItem(`mapdev_dl_${assetId}`) || '0', 10);
+    const newTracked = currentTracked + 1;
+    localStorage.setItem(`mapdev_dl_${assetId}`, newTracked.toString());
+
+    // 2. Update UI list
     setAssetsList((prev) => {
       const next = prev.map((item) => {
         if (item.id === assetId) {
           const currentDownloads = item.stats?.downloads || 0;
+          const best = Math.max(currentDownloads + 1, newTracked);
           return {
             ...item,
             stats: {
               ...item.stats,
-              downloads: currentDownloads + 1,
+              downloads: best,
             },
           };
         }
@@ -249,7 +287,7 @@ export default function Home() {
       return next;
     });
 
-    // Background persistent sync to backend & GitHub so it never resets on redeploy
+    // 3. Background persistent sync to backend & GitHub
     try {
       fetch('/api/assets/download', {
         method: 'POST',
