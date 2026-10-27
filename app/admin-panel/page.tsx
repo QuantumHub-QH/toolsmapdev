@@ -248,8 +248,8 @@ export default function AdminPanelPage() {
   const handleMapFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 30 * 1024 * 1024) {
-        alert('Ukuran file map maksimal 30MB untuk direct web storage.');
+      if (file.size > 3.5 * 1024 * 1024) {
+        alert('Ukuran file map langsung via web maksimal 3.5MB agar tidak melampaui batas server Vercel.\n\nUntuk file map yang lebih besar dari 3.5MB, silakan upload file ke Google Drive / Mediafire lalu masukkan link-nya di kolom "B. URL Download File Eksternal" di bawah!');
         return;
       }
       setUploadedFileName(file.name);
@@ -304,33 +304,46 @@ export default function AdminPanelPage() {
       alert('Tidak ada produk di daftar untuk disinkronkan.');
       return;
     }
-    if (!confirm(`Kirim semua ${products.length} produk dari browser ini ke Cloud Firestore & GitHub sekarang? Semua pengunjung web akan langsung bisa melihatnya.`)) return;
+    if (!confirm(`Publikasikan semua ${products.length} produk ke publik sekarang? Proses dilakukan satu per satu agar tidak melampaui batas server.`)) return;
 
     setSyncing(true);
     setStatusMessage(null);
     try {
-      const res = await fetch('/api/admin-panel/products', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bulkProducts: products, token: githubToken }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
+      let successCount = 0;
+      for (let i = 0; i < products.length; i++) {
+        const item = products[i];
         setStatusMessage({
           type: 'success',
-          text: `🚀 BERHASIL! Semua ${products.length} produk kamu sekarang sudah aktif di CLOUD & GITHUB. Semua pengunjung di HP/laptop manapun sekarang bisa melihatnya!`,
+          text: `Sedang mem-publish (${i + 1}/${products.length}): "${item.title}"... Mohon tunggu sebentar.`,
         });
-        localStorage.setItem('mapdev_saved_products', JSON.stringify(products));
-      } else {
-        setStatusMessage({
-          type: 'error',
-          text: data.error || 'Gagal sinkronisasi produk ke cloud. Pastikan token GitHub valid.',
+        const res = await fetch('/api/admin-panel/products', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ product: item, token: githubToken }),
         });
+        const text = await res.text();
+        let data: any = {};
+        try {
+          data = JSON.parse(text);
+        } catch {
+          throw new Error(res.status === 413 ? `File "${item.title}" terlalu besar (>3.5MB). Gunakan link Google Drive/Mediafire.` : text);
+        }
+        if (res.ok && data.success) {
+          successCount++;
+        } else {
+          throw new Error(data.error || `Gagal publish "${item.title}"`);
+        }
       }
+
+      setStatusMessage({
+        type: 'success',
+        text: `🚀 BERHASIL! Semua ${successCount} produk kamu sekarang sudah AKTIF dan TER-PUBLISH di katalog publik!`,
+      });
+      fetchProducts();
     } catch (e: any) {
       setStatusMessage({
         type: 'error',
-        text: 'Error kirim ke cloud: ' + e.message,
+        text: 'Gagal mem-publish ke publik: ' + e.message,
       });
     } finally {
       setSyncing(false);
@@ -391,17 +404,26 @@ export default function AdminPanelPage() {
       const res = await fetch('/api/admin-panel/products', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ product: productPayload, clientProducts: updatedLocalList, token: githubToken }),
+        body: JSON.stringify({ product: productPayload, token: githubToken }),
       });
 
-      const data = await res.json();
+      const rawText = await res.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(rawText);
+      } catch (e) {
+        if (res.status === 413 || rawText.includes('Request Entity Too Large')) {
+          throw new Error('Ukuran file map melebihi batas 3.5MB. Silakan gunakan opsi link download eksternal (Google Drive / Mediafire).');
+        }
+        throw new Error(rawText || `Server error (${res.status})`);
+      }
+
       if (res.ok && data.success) {
         setStatusMessage({
           type: 'success',
-          text: data.message || '✅ Produk berhasil disimpan permanen ke GitHub!',
+          text: data.message || '🚀 Produk berhasil langsung di-publish ke publik!',
         });
         if (data.data && Array.isArray(data.data)) {
-          // Merge server products with local state so NO products can ever be dropped
           setProducts((prev) => {
             const map = new Map<string, Asset>();
             for (const p of data.data) {
@@ -419,11 +441,10 @@ export default function AdminPanelPage() {
         }
         resetForm();
       } else {
-        // Backend couldn't commit to GitHub (e.g. no token), but local is preserved
         setShowTokenInput(true);
         setStatusMessage({
           type: 'error',
-          text: (data.error || 'Gagal commit ke GitHub.') + ' Produk telah disimpan di browser ini. Agar tidak hilang saat redeploy, pastikan token GitHub di bawah valid!',
+          text: (data.error || 'Gagal commit ke publik.') + ' Produk telah disimpan di browser ini.',
         });
         resetForm();
       }
@@ -668,15 +689,7 @@ export default function AdminPanelPage() {
               <span className="hidden sm:inline">Refresh</span>
             </button>
 
-            <button
-              onClick={handleSyncAllProductsToCloud}
-              disabled={syncing || products.length === 0}
-              className="flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-600 hover:bg-emerald-500 px-3.5 py-1.5 text-xs font-mono font-bold text-white transition-all shadow-md active:scale-95 disabled:opacity-40"
-              title="Kirim semua produk di browser ini ke Cloud Firestore & GitHub agar bisa dilihat pengunjung lain"
-            >
-              <Upload className={`h-3.5 w-3.5 ${syncing ? 'animate-bounce' : ''}`} />
-              <span>{syncing ? 'Mengupload ke Cloud...' : `Publish Semua ke Publik (${products.length})`}</span>
-            </button>
+
 
             <button
               onClick={downloadBackupJson}
@@ -924,7 +937,7 @@ export default function AdminPanelPage() {
                       Klik untuk Upload File Map dari Laptop/HP
                     </p>
                     <p className="text-[10px] text-zinc-400 mt-1">
-                      Format: <strong>.rbxm, .rbxl, .zip, .rar, .obj</strong> (Max 30MB)
+                      Format: <strong>.rbxm, .rbxl, .zip, .rar, .obj</strong> (Max 3.5MB Direct Upload)
                     </p>
                   </label>
                 </div>
@@ -1090,17 +1103,17 @@ export default function AdminPanelPage() {
                 <button
                   type="submit"
                   disabled={syncing}
-                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-white py-3 text-xs font-bold font-mono text-black hover:bg-zinc-200 transition-all uppercase shadow-lg disabled:opacity-50"
+                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 py-3.5 text-xs font-bold font-mono text-black transition-all uppercase shadow-lg shadow-emerald-500/20 active:scale-[0.98] disabled:opacity-50"
                 >
                   {syncing ? (
                     <>
                       <RefreshCw className="h-4 w-4 animate-spin" />
-                      <span>Menyimpan ke Web Publik...</span>
+                      <span>Mengunggah & Mem-publish ke Publik...</span>
                     </>
                   ) : (
                     <>
-                      <PlusCircle className="h-4 w-4" />
-                      <span>{editingId ? 'Simpan Perubahan' : 'Publish Produk ke Web'}</span>
+                      <Upload className="h-4 w-4" />
+                      <span>{editingId ? '💾 Simpan Perubahan & Publish' : '🚀 Publish Langsung ke Web Publik'}</span>
                     </>
                   )}
                 </button>
@@ -1119,17 +1132,18 @@ export default function AdminPanelPage() {
                       Daftar Produk Aktif ({products.length})
                     </h2>
                     <p className="text-xs text-zinc-400">
-                      Klik <strong>Publish Semua ke Publik</strong> agar produk bisa dilihat pengunjung lain dari device mana saja.
+                      Setiap produk yang di-upload dari formulir di samping otomatis langsung ter-publish ke publik.
                     </p>
                   </div>
                   {products.length > 0 && (
                     <button
                       onClick={handleSyncAllProductsToCloud}
                       disabled={syncing}
-                      className="flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 text-xs font-mono font-bold text-white shadow-md active:scale-95 disabled:opacity-40 shrink-0"
+                      className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-surface hover:bg-zinc-800 px-3 py-1.5 text-xs font-mono text-zinc-300 hover:text-white shrink-0"
+                      title="Sinkronkan ulang seluruh produk jika ada yang belum masuk ke publik"
                     >
-                      <Upload className={`h-3.5 w-3.5 ${syncing ? 'animate-bounce' : ''}`} />
-                      <span>{syncing ? 'Menyinkronkan...' : 'Kirim Semua ke Cloud ➔'}</span>
+                      <Upload className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
+                      <span>{syncing ? 'Memproses...' : 'Sinkronkan Ulang Semua'}</span>
                     </button>
                   )}
                 </div>
