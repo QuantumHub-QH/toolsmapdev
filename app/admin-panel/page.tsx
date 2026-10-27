@@ -407,10 +407,15 @@ export default function AdminPanelPage() {
       alert('Tidak ada produk di daftar untuk disinkronkan.');
       return;
     }
-    if (!confirm(`Publikasikan SEMUA ${products.length} produk langsung ke web publik sekarang? Semua pengunjung web akan langsung bisa melihatnya.`)) return;
+    const pendingProducts = products.filter((product) => !liveProductIds.has(product.id));
+    if (pendingProducts.length === 0) {
+      setStatusMessage({ type: 'success', text: 'Semua produk sudah live di web publik.' });
+      return;
+    }
+    if (!confirm(`Publikasikan ${pendingProducts.length} produk yang belum live ke web publik sekarang?`)) return;
 
     setSyncing(true);
-    setStatusMessage({ type: 'success', text: 'Sedang mengirim semua produk langsung ke GitHub... Mohon tunggu.' });
+    setStatusMessage({ type: 'success', text: `Sedang mem-publish ${pendingProducts.length} produk... Mohon tunggu.` });
     try {
       let res = await commitDirectToGitHub(products);
       if (!res.success) {
@@ -422,7 +427,7 @@ export default function AdminPanelPage() {
             'Authorization': 'Bearer ' + (sessionStorage.getItem('admin_panel_session') || 'authenticated'),
             'x-github-token': getOrgToken(),
           },
-          body: JSON.stringify({ bulkProducts: products, token: getOrgToken() }),
+          body: JSON.stringify({ bulkProducts: pendingProducts, token: getOrgToken() }),
         });
         const serverData = await serverRes.json().catch(() => ({}));
         if (serverRes.ok && serverData.success) {
@@ -433,10 +438,13 @@ export default function AdminPanelPage() {
       }
 
       if (res.success) {
-        setLiveProductIds(new Set(products.map((p) => p.id)));
+        setLiveProductIds((current) => new Set([
+          ...current,
+          ...pendingProducts.map((product) => product.id),
+        ]));
         setStatusMessage({
           type: 'success',
-          text: `🚀 SUKSES BESAR! Semua ${products.length} produk kamu sekarang SUDAH LIVE DI WEB PUBLIK! Semua pengunjung di HP/laptop manapun sudah bisa melihatnya!`,
+          text: `🚀 Berhasil! ${pendingProducts.length} produk sekarang live di web publik.`,
         });
         localStorage.setItem('mapdev_saved_products', JSON.stringify(products));
       } else {
@@ -527,6 +535,7 @@ export default function AdminPanelPage() {
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok && data.success) {
+          setLiveProductIds((current) => new Set([...current, formattedLocal.id]));
           setStatusMessage({
             type: 'success',
             text: '🚀 Produk berhasil disimpan ke server publik!',
@@ -535,9 +544,8 @@ export default function AdminPanelPage() {
         } else {
           setStatusMessage({
             type: 'error',
-            text: 'Gagal publish ke publik: ' + (commitRes.error || data.error || 'Cek token kamu'),
+            text: 'Gagal publish ke publik: ' + (data.error || commitRes.error || 'Cek token kamu'),
           });
-          resetForm();
         }
       }
     } catch (err: any) {

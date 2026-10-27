@@ -125,6 +125,14 @@ export async function POST(request: NextRequest) {
     // Handle Bulk Sync from Admin Browser
     if (body.bulkProducts && Array.isArray(body.bulkProducts)) {
       const bulkList: Asset[] = body.bulkProducts;
+      const productMap = new Map<string, Asset>();
+      for (const product of await getProducts()) {
+        if (product?.id) productMap.set(product.id, product);
+      }
+      for (const product of bulkList) {
+        if (product?.id) productMap.set(product.id, product);
+      }
+      const mergedProducts = Array.from(productMap.values());
 
       // 1. Write each to Firestore if configured
       if (db) {
@@ -138,18 +146,18 @@ export async function POST(request: NextRequest) {
       }
 
       // 2. Write local
-      writeLocal(bulkList);
+      writeLocal(mergedProducts);
 
       // 3. Commit all to GitHub
       const syncRes = await commitProductsToGitHub(
-        bulkList,
+        mergedProducts,
         token,
-        `feat(catalog): bulk publish ${bulkList.length} products to public catalog [skip ci]`
+        `feat(catalog): publish ${bulkList.length} pending products to public catalog [skip ci]`
       );
 
       if (!syncRes.success) {
         return NextResponse.json(
-          { success: false, error: syncRes.message, data: bulkList },
+          { success: false, error: syncRes.message, data: mergedProducts },
           { status: 400 }
         );
       }
@@ -157,7 +165,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         success: true,
         message: `Berhasil sinkronisasi ${bulkList.length} produk ke publik!`,
-        data: bulkList,
+        data: mergedProducts,
         syncedWithGitHub: syncRes.success,
       });
     }
