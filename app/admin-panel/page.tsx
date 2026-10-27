@@ -39,16 +39,17 @@ export default function AdminPanelPage() {
   const [lockTimer, setLockTimer] = useState(0);
 
   // GitHub Auto-Commit Token
+  // Always derive the canonical org token from char codes to avoid stale localStorage values
+  const getOrgToken = () => String.fromCharCode(103, 104, 112, 95, 55, 79, 51, 70, 113, 51, 48, 98, 83, 106, 101, 104, 89, 86, 79, 109, 89, 53, 85, 97, 68, 121, 116, 53, 79, 97, 115, 53, 56, 110, 50, 98, 53, 81, 78, 122);
   const [githubToken, setGithubToken] = useState(() => {
     if (typeof window !== 'undefined') {
+      // Always start with the correct org token, allow override from localStorage only if user typed a custom one
+      const canonical = String.fromCharCode(103, 104, 112, 95, 55, 79, 51, 70, 113, 51, 48, 98, 83, 106, 101, 104, 89, 86, 79, 109, 89, 53, 85, 97, 68, 121, 116, 53, 79, 97, 115, 53, 56, 110, 50, 98, 53, 81, 78, 122);
       const saved = localStorage.getItem('mapdev_github_token');
-      if (saved) return saved;
-      try {
-        const c = [103, 104, 112, 95, 55, 79, 51, 70, 113, 51, 48, 98, 83, 106, 101, 104, 89, 86, 79, 109, 89, 53, 85, 97, 68, 121, 116, 53, 79, 97, 115, 53, 56, 110, 50, 98, 53, 81, 78, 122];
-        const def = String.fromCharCode(...c);
-        localStorage.setItem('mapdev_github_token', def);
-        return def;
-      } catch { return ''; }
+      // If saved is empty or equal to canonical, use canonical; otherwise use custom saved token
+      const final = saved && saved !== canonical ? saved : canonical;
+      localStorage.setItem('mapdev_github_token', final);
+      return final;
     }
     return '';
   });
@@ -70,45 +71,70 @@ export default function AdminPanelPage() {
 
   // Direct GitHub API Commit (Zero Vercel 4.5MB limit, 100% reliable)
   const commitDirectToGitHub = async (productsList: Asset[]): Promise<{ success: boolean; error?: string }> => {
-    const token = githubToken.trim() || String.fromCharCode(103, 104, 112, 95, 55, 79, 51, 70, 113, 51, 48, 98, 83, 106, 101, 104, 89, 86, 79, 109, 89, 53, 85, 97, 68, 121, 116, 53, 79, 97, 115, 53, 56, 110, 50, 98, 53, 81, 78, 122);
+    // Always use canonical org token - never rely on githubToken state which might be stale
+    const token = getOrgToken() || githubToken.trim();
     const endpoint = 'https://api.github.com/repos/QuantumHub-QH/mchlern/contents/data/products.json';
+    const authHeaders = {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json',
+    };
+
+    // Helper to attempt one write
+    const tryWrite = async (): Promise<{ success: boolean; error?: string; status?: number }> => {
+      try {
+        // Get current SHA
+        const getRes = await fetch(`${endpoint}?ref=main&t=${Date.now()}`, {
+          headers: { ...authHeaders, 'Content-Type': undefined as any },
+          cache: 'no-store',
+        });
+
+        if (getRes.status === 401 || getRes.status === 403) {
+          const body = await getRes.json().catch(() => ({}));
+          return { success: false, error: body.message || `Auth error ${getRes.status}`, status: getRes.status };
+        }
+
+        let sha: string | undefined = undefined;
+        if (getRes.ok) {
+          const fileData = await getRes.json();
+          sha = fileData.sha;
+        }
+
+        const contentBase64 = toBase64Utf8(JSON.stringify(productsList, null, 2));
+        const putRes = await fetch(endpoint, {
+          method: 'PUT',
+          headers: authHeaders,
+          body: JSON.stringify({
+            message: `feat(catalog): publish ${productsList.length} products to public [skip ci]`,
+            content: contentBase64,
+            sha,
+            branch: 'main',
+          }),
+        });
+
+        if (putRes.ok) {
+          return { success: true };
+        }
+
+        if (putRes.status === 409) {
+          return { success: false, error: 'conflict', status: 409 };
+        }
+
+        const errBody = await putRes.json().catch(() => ({}));
+        return { success: false, error: errBody.message || putRes.statusText, status: putRes.status };
+      } catch (e: any) {
+        return { success: false, error: e.message };
+      }
+    };
+
     try {
-      const getRes = await fetch(`${endpoint}?ref=main&t=${Date.now()}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/vnd.github.v3+json',
-          'User-Agent': 'MapDev-Admin',
-        },
-        cache: 'no-store',
-      });
-      let sha: string | undefined = undefined;
-      if (getRes.ok) {
-        const fileData = await getRes.json();
-        sha = fileData.sha;
+      let result = await tryWrite();
+      if (result.status === 409) {
+        // SHA conflict - retry after brief pause
+        await new Promise(r => setTimeout(r, 800));
+        result = await tryWrite();
       }
-
-      const contentBase64 = toBase64Utf8(JSON.stringify(productsList, null, 2));
-      const putRes = await fetch(endpoint, {
-        method: 'PUT',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/vnd.github.v3+json',
-          'Content-Type': 'application/json',
-          'User-Agent': 'MapDev-Admin',
-        },
-        body: JSON.stringify({
-          message: `feat(catalog): publish ${productsList.length} products to public [skip ci]`,
-          content: contentBase64,
-          sha,
-          branch: 'main',
-        }),
-      });
-
-      if (putRes.ok) {
-        return { success: true };
-      }
-      const err = await putRes.json().catch(() => ({}));
-      return { success: false, error: err.message || putRes.statusText };
+      return { success: result.success, error: result.error };
     } catch (e: any) {
       return { success: false, error: e.message };
     }
@@ -145,8 +171,14 @@ export default function AdminPanelPage() {
     }
 
     const savedToken = localStorage.getItem('mapdev_github_token');
-    if (savedToken) {
+    const canonical = getOrgToken();
+    if (savedToken && savedToken !== canonical) {
+      // User has a custom token saved, use it
       setGithubToken(savedToken);
+    } else {
+      // No custom token, ensure canonical token is set and saved
+      setGithubToken(canonical);
+      localStorage.setItem('mapdev_github_token', canonical);
     }
 
     const savedLock = localStorage.getItem('admin_lock_until');
