@@ -1,31 +1,17 @@
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
+
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { Asset } from '@/types';
 import { db } from '@/lib/firebase';
 import { doc, updateDoc, increment } from 'firebase/firestore';
-import { fetchProductsFromGitHub, commitProductsToGitHub } from '@/lib/github';
+import { commitStatsToGitHub } from '@/lib/github';
+import { getLiveStats, writeLocalStats } from '@/lib/stats';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
-
-async function getLiveProducts(): Promise<Asset[]> {
-  // 1. Try direct GitHub API (live, uncached)
-  try {
-    const gh = await fetchProductsFromGitHub();
-    if (gh.length > 0) return gh;
-  } catch (e) {}
-
-  // 2. Try local file
-  try {
-    if (fs.existsSync(DATA_FILE_PATH)) {
-      const content = fs.readFileSync(DATA_FILE_PATH, 'utf-8');
-      const parsed = JSON.parse(content);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch (e) {}
-
-  return [];
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -47,50 +33,56 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 2. Read current products and update local & GitHub
-    const products = await getLiveProducts();
-    let updatedAsset: Asset | null = null;
+    // 2. Update Global Stats Store
+    const stats = await getLiveStats();
+    const currentAssetDl = stats.downloads[assetId] || 0;
+    const newAssetDl = currentAssetDl + 1;
+    const newTotalDl = stats.totalDownloads + 1;
 
-    const updatedProducts = products.map((item) => {
-      if (item.id === assetId) {
-        const currentDownloads = item.stats?.downloads || 0;
-        updatedAsset = {
-          ...item,
-          stats: {
-            ...item.stats,
-            downloads: currentDownloads + 1,
-          },
-        };
-        return updatedAsset;
-      }
-      return item;
+    const updatedStats = {
+      ...stats,
+      totalDownloads: newTotalDl,
+      downloads: {
+        ...stats.downloads,
+        [assetId]: newAssetDl,
+      },
+      updatedAt: new Date().toISOString(),
+    };
+
+    writeLocalStats(updatedStats);
+
+    // Fast sync to GitHub stats.json
+    commitStatsToGitHub(updatedStats).catch((err) => {
+      console.warn('Failed background GitHub download stats commit:', err);
     });
 
-    // 3. Write locally
+    // 3. Best effort update local products.json if it exists
     try {
-      const dir = path.dirname(DATA_FILE_PATH);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(DATA_FILE_PATH, JSON.stringify(updatedProducts, null, 2), 'utf-8');
+      if (fs.existsSync(DATA_FILE_PATH)) {
+        const content = fs.readFileSync(DATA_FILE_PATH, 'utf-8');
+        const products: Asset[] = JSON.parse(content);
+        if (Array.isArray(products)) {
+          const updatedProducts = products.map((item) => {
+            if (item.id === assetId) {
+              return {
+                ...item,
+                stats: {
+                  ...item.stats,
+                  downloads: (item.stats?.downloads || 0) + 1,
+                },
+              };
+            }
+            return item;
+          });
+          fs.writeFileSync(DATA_FILE_PATH, JSON.stringify(updatedProducts, null, 2), 'utf-8');
+        }
+      }
     } catch (e) {}
-
-    // 4. Asynchronously commit incremented count to GitHub
-    commitProductsToGitHub(
-      updatedProducts,
-      undefined,
-      `chore(downloads): increment download count for asset ${assetId} [skip ci]`
-    ).catch((err) => {
-      console.warn('Failed background GitHub download commit:', err);
-    });
-
-    const totalDownloads = updatedProducts.reduce(
-      (acc, curr) => acc + (curr.stats?.downloads || 0),
-      0
-    );
 
     return NextResponse.json({
       success: true,
-      asset: updatedAsset,
-      totalDownloads,
+      totalDownloads: newTotalDl,
+      assetDownloads: newAssetDl,
     });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });

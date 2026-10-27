@@ -230,7 +230,7 @@ export default function AdminPanelPage() {
       const data = await res.json();
       if (res.ok && data.success) {
         setIsAuthenticated(true);
-        sessionStorage.setItem('admin_panel_session', 'authenticated');
+        sessionStorage.setItem('admin_panel_session', data.token || 'authenticated');
         setFailCount(0);
         fetchProducts();
       } else {
@@ -493,7 +493,11 @@ export default function AdminPanelPage() {
         // Fallback to server API if browser direct commit fails
         const res = await fetch('/api/admin-panel/products', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + (sessionStorage.getItem('admin_panel_session') || ''),
+            'x-github-token': getOrgToken(),
+          },
           body: JSON.stringify({ product: productPayload, token: githubToken }),
         });
         const data = await res.json().catch(() => ({}));
@@ -544,7 +548,7 @@ export default function AdminPanelPage() {
 
     // 3. Send DELETE to server & commit to GitHub
     try {
-      const res = await fetch(`/api/admin-panel/products?id=${id}`, {
+      const res = await fetch(`/api/admin-panel/products?id=${encodeURIComponent(id)}&token=${encodeURIComponent(getOrgToken())}`, {
         method: 'DELETE',
         headers: { 'x-github-token': githubToken },
       });

@@ -24,6 +24,10 @@ export default function Home() {
   const [activeSection, setActiveSection] = useState('assets');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Global Real-time Counters (All Users & Visitors)
+  const [totalVisitors, setTotalVisitors] = useState<number>(142);
+  const [globalDownloads, setGlobalDownloads] = useState<number>(36);
+
   // Discord Authorization State
   const [discordUser, setDiscordUser] = useState<DiscordUser | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
@@ -71,6 +75,29 @@ export default function Home() {
     } finally {
       setIsAuthChecking(false);
     }
+  }, []);
+
+  // Record visit & fetch live global stats for all users
+  useEffect(() => {
+    async function loadGlobalStats() {
+      try {
+        const hasVisited = sessionStorage.getItem('mapdev_visited_session');
+        const res = await fetch('/api/stats', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: hasVisited ? 'ping' : 'visit' }),
+        });
+        sessionStorage.setItem('mapdev_visited_session', 'true');
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && json.data) {
+            if (json.data.totalVisitors) setTotalVisitors(json.data.totalVisitors);
+            if (json.data.totalDownloads) setGlobalDownloads(json.data.totalDownloads);
+          }
+        }
+      } catch (e) {}
+    }
+    loadGlobalStats();
   }, []);
 
   // Load bookmarks from localStorage
@@ -305,13 +332,15 @@ export default function Home() {
       }).catch((err) => console.error('Download sync err:', err));
     } catch (e) {}
 
+    setGlobalDownloads((prev) => prev + 1);
     showToast('Download started! Total unduhan diperbarui.');
   };
 
   // Total real-time downloads across all assets
   const totalDownloads = useMemo(() => {
-    return assetsList.reduce((acc, curr) => acc + (curr.stats?.downloads || 0), 0);
-  }, [assetsList]);
+    const sumAssetDownloads = assetsList.reduce((acc, curr) => acc + (curr.stats?.downloads || 0), 0);
+    return Math.max(sumAssetDownloads, globalDownloads);
+  }, [assetsList, globalDownloads]);
 
   // Filter & sort assets
   const filteredAssets = useMemo(() => {
@@ -406,6 +435,7 @@ export default function Home() {
         searchInputRef={searchInputRef}
         totalAssets={assetsList.length}
         totalDownloads={totalDownloads}
+        totalVisitors={totalVisitors}
       />
 
       {/* Asset Catalog Section */}

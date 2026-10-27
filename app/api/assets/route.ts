@@ -9,6 +9,7 @@ import { Asset, AssetCategory } from '@/types';
 import { db } from '@/lib/firebase';
 import { collection, getDocs } from 'firebase/firestore';
 import { fetchProductsFromGitHub } from '@/lib/github';
+import { getLiveStats } from '@/lib/stats';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
 
@@ -63,7 +64,20 @@ export async function GET(request: NextRequest) {
   const category = searchParams.get('category');
   const search = searchParams.get('search')?.toLowerCase();
 
-  const allAssets = await getLiveAssets();
+  const rawAssets = await getLiveAssets();
+  const globalStats = await getLiveStats();
+
+  const allAssets = rawAssets.map((asset) => {
+    const globalDl = globalStats.downloads[asset.id] || 0;
+    const baseDl = asset.stats?.downloads || 0;
+    return {
+      ...asset,
+      stats: {
+        ...asset.stats,
+        downloads: Math.max(globalDl, baseDl),
+      },
+    };
+  });
 
   let filtered = allAssets;
 

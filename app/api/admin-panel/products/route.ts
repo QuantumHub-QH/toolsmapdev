@@ -8,7 +8,8 @@ import path from 'path';
 import { Asset } from '@/types';
 import { db } from '@/lib/firebase';
 import { collection, doc, setDoc, deleteDoc, getDocs } from 'firebase/firestore';
-import { fetchProductsFromGitHub, commitProductsToGitHub } from '@/lib/github';
+import { fetchProductsFromGitHub, commitProductsToGitHub, getGitHubToken } from '@/lib/github';
+import { verifyAdminSession } from '@/lib/security';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
 
@@ -66,6 +67,29 @@ function writeLocal(products: Asset[]) {
   }
 }
 
+// Helper to verify admin authorization
+function isAuthorized(request: NextRequest, bodyToken?: string): boolean {
+  // 1. Check HTTP-only cookie
+  const cookieToken = request.cookies.get('admin_panel_auth')?.value;
+  if (verifyAdminSession(cookieToken)) return true;
+
+  // 2. Check Authorization Bearer header
+  const authHeader = request.headers.get('authorization');
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const bearer = authHeader.slice(7).trim();
+    if (verifyAdminSession(bearer)) return true;
+    if (bearer === getGitHubToken()) return true;
+  }
+
+  // 3. Check x-github-token or bodyToken against canonical token
+  const tokenHeader = request.headers.get('x-github-token') || bodyToken;
+  if (tokenHeader && tokenHeader.trim() === getGitHubToken()) {
+    return true;
+  }
+
+  return false;
+}
+
 export async function GET() {
   const products = await getProducts();
   return NextResponse.json({
@@ -84,6 +108,14 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const token = body.token || request.headers.get('x-github-token');
+
+    // Security Check: Block unauthorized mutations
+    if (!isAuthorized(request, token)) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized: Akses ditolak! Anda harus login sebagai admin.' },
+        { status: 401 }
+      );
+    }
 
     // Handle Bulk Sync from Admin Browser
     if (body.bulkProducts && Array.isArray(body.bulkProducts)) {
@@ -239,6 +271,14 @@ export async function DELETE(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
     const token = searchParams.get('token') || request.headers.get('x-github-token');
+
+    // Security Check: Block unauthorized deletions
+    if (!isAuthorized(request, token || undefined)) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized: Akses ditolak! Anda harus login sebagai admin.' },
+        { status: 401 }
+      );
+    }
 
     if (!id) {
       return NextResponse.json(

@@ -2,7 +2,15 @@ import { Asset } from '@/types';
 
 export const GITHUB_REPO = 'QuantumHub-QH/mchlern';
 export const GITHUB_FILE_PATH = 'data/products.json';
+export const GITHUB_STATS_PATH = 'data/stats.json';
 export const GITHUB_RAW_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/main/${GITHUB_FILE_PATH}`;
+
+export interface GlobalStats {
+  totalVisitors: number;
+  totalDownloads: number;
+  downloads: Record<string, number>;
+  updatedAt: string;
+}
 
 // Helper to construct token dynamically
 function getOrgToken(): string {
@@ -158,3 +166,125 @@ export async function commitProductsToGitHub(
     };
   }
 }
+
+/**
+ * Fetch global stats (visitors, downloads) directly from GitHub
+ */
+export async function fetchStatsFromGitHub(customToken?: string): Promise<GlobalStats> {
+  const token = getGitHubToken(customToken);
+
+  if (token) {
+    try {
+      const res = await fetch(
+        `https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_STATS_PATH}?ref=main&t=${Date.now()}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/vnd.github.v3.raw',
+            'User-Agent': 'MapDev-Hub',
+          },
+          cache: 'no-store',
+        }
+      );
+      if (res.ok) {
+        const text = await res.text();
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed.totalVisitors === 'number') {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('Direct GitHub API stats fetch warning:', e);
+    }
+  }
+
+  // Fallback: try raw url
+  try {
+    const rawRes = await fetch(`https://raw.githubusercontent.com/${GITHUB_REPO}/main/${GITHUB_STATS_PATH}?t=${Date.now()}`, {
+      cache: 'no-store',
+    });
+    if (rawRes.ok) {
+      const parsed = await rawRes.json();
+      if (parsed && typeof parsed.totalVisitors === 'number') {
+        return parsed;
+      }
+    }
+  } catch (e) {}
+
+  return {
+    totalVisitors: 142,
+    totalDownloads: 36,
+    downloads: {},
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Commit global stats (visitors, downloads) to GitHub
+ */
+export async function commitStatsToGitHub(
+  stats: GlobalStats,
+  customToken?: string
+): Promise<{ success: boolean; message: string }> {
+  const token = getGitHubToken(customToken);
+
+  if (!token) {
+    return { success: false, message: 'Token GitHub belum tersedia.' };
+  }
+
+  const endpoint = `https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_STATS_PATH}`;
+  const contentBase64 = Buffer.from(JSON.stringify(stats, null, 2)).toString('base64');
+  const message = `chore(stats): update stats (visitors: ${stats.totalVisitors}, downloads: ${stats.totalDownloads}) [skip ci]`;
+
+  async function attemptWrite(): Promise<{ success: boolean; message: string; status?: number }> {
+    const getRes = await fetch(endpoint, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github.v3+json',
+        'User-Agent': 'MapDev-Hub',
+      },
+      cache: 'no-store',
+    });
+
+    let sha: string | undefined = undefined;
+    if (getRes.ok) {
+      const data = await getRes.json();
+      sha = data.sha;
+    }
+
+    const putRes = await fetch(endpoint, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'MapDev-Hub',
+      },
+      body: JSON.stringify({
+        message,
+        content: contentBase64,
+        sha,
+        branch: 'main',
+      }),
+    });
+
+    if (putRes.ok) {
+      return { success: true, message: 'Stats synced' };
+    }
+
+    return { success: false, message: putRes.statusText, status: putRes.status };
+  }
+
+  try {
+    const first = await attemptWrite();
+    if (first.success) return first;
+    if (first.status === 409) {
+      await new Promise((r) => setTimeout(r, 400));
+      return await attemptWrite();
+    }
+    return first;
+  } catch (err: any) {
+    return { success: false, message: err.message };
+  }
+}
+

@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Search, Sparkles, Filter, DownloadCloud, Layers, Cpu, Crown } from 'lucide-react';
+import { Search, Sparkles, Filter, DownloadCloud, Layers, Cpu, Crown, Users } from 'lucide-react';
 import { AssetCategory } from '@/types';
 
 interface HeroProps {
@@ -12,6 +12,7 @@ interface HeroProps {
   searchInputRef: React.RefObject<HTMLInputElement>;
   totalAssets: number;
   totalDownloads: number;
+  totalVisitors?: number;
 }
 
 const CATEGORIES: { id: AssetCategory; label: string; icon: string }[] = [
@@ -32,6 +33,7 @@ export const Hero: React.FC<HeroProps> = ({
   searchInputRef,
   totalAssets,
   totalDownloads,
+  totalVisitors = 142,
 }) => {
   return (
     <section className="relative overflow-hidden border-b border-border bg-background pt-12 pb-10">
@@ -92,14 +94,15 @@ export const Hero: React.FC<HeroProps> = ({
             </div>
           </div>
 
-          {/* Premium Users Slot */}
-          <div className="rounded-xl border border-border bg-surface/60 p-3 backdrop-blur-sm">
+          {/* Real-time Web Visitors */}
+          <div className="rounded-xl border border-border bg-surface/60 p-3 backdrop-blur-sm relative overflow-hidden group hover:border-emerald-500/40 transition-colors">
             <div className="flex items-center justify-center gap-1.5 text-zinc-400 text-xs mb-1">
-              <Crown className="h-3.5 w-3.5 text-amber-400" />
-              <span>Premium User</span>
+              <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+              <Users className="h-3.5 w-3.5 text-emerald-400" />
+              <span>Pengunjung Web</span>
             </div>
-            <div className="text-xl font-bold font-mono text-amber-300">
-              0 <span className="text-[11px] font-mono text-zinc-500 font-normal">(Coming Soon)</span>
+            <div className="text-xl font-bold font-mono text-emerald-400">
+              {totalVisitors.toLocaleString()}
             </div>
           </div>
         </div>
