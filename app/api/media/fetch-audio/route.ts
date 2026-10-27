@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Ytdl } from '@distube/ytdl-core';
+import { Ytdl, Client } from '@distube/ytdl-core';
+
+function extractYouTubeId(url: string): string | null {
+  const match = url.match(
+    /(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|shorts\/)|music\.youtube\.com\/watch\?v=)([\w-]{11})/i
+  );
+  return match ? match[1] : null;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -64,51 +71,98 @@ export async function POST(request: NextRequest) {
     }
 
     // 2. Check YouTube or YouTube Music
+    const ytVideoId = extractYouTubeId(rawUrl);
     if (
+      ytVideoId ||
       rawUrl.includes('youtube.com') ||
       rawUrl.includes('youtu.be') ||
       rawUrl.includes('music.youtube.com')
     ) {
+      const cleanUrl = ytVideoId
+        ? `https://www.youtube.com/watch?v=${ytVideoId}`
+        : rawUrl;
+
+      // Method A: Ytdl with VisionOS client (Needs no player script decipher, works on Vercel AWS Lambda)
       try {
-        const yt = new Ytdl();
-        const info = await yt.getInfo(rawUrl);
+        const yt = new Ytdl({
+          clients: [Client.VisionOS, Client.Tv, Client.WebEmbedded],
+        });
+        const info = await yt.getInfo(cleanUrl);
 
         // Find best audio format
         const audioFormat =
           info.formats.find((f) => f.hasAudio && !f.hasVideo && f.url) ||
           info.formats.find((f) => f.hasAudio && f.url);
 
-        if (!audioFormat || !audioFormat.url) {
-          return NextResponse.json(
-            { success: false, error: 'Stream audio tidak ditemukan untuk video YouTube ini' },
-            { status: 404 }
-          );
+        if (audioFormat && audioFormat.url) {
+          const thumbs = info.videoDetails.thumbnails || [];
+          const bestThumb =
+            thumbs[thumbs.length - 1]?.url ||
+            `https://i.ytimg.com/vi/${info.videoDetails.id || ytVideoId}/hqdefault.jpg`;
+
+          const duration = info.videoDetails.lengthSeconds || 0;
+          const platform = rawUrl.includes('music.youtube.com') ? 'youtube_music' : 'youtube';
+
+          return NextResponse.json({
+            success: true,
+            platform,
+            title: info.videoDetails.title || 'YouTube Audio',
+            author: info.videoDetails.author?.name || 'YouTube Creator',
+            thumbnail: bestThumb,
+            duration,
+            audioUrl: audioFormat.url,
+            proxyAudioUrl: `/api/media/stream?url=${encodeURIComponent(audioFormat.url)}`,
+          });
         }
-
-        const thumbs = info.videoDetails.thumbnails || [];
-        const bestThumb =
-          thumbs[thumbs.length - 1]?.url ||
-          `https://i.ytimg.com/vi/${info.videoDetails.id}/hqdefault.jpg`;
-
-        const duration = info.videoDetails.lengthSeconds || 0;
-        const platform = rawUrl.includes('music.youtube.com') ? 'youtube_music' : 'youtube';
-
-        return NextResponse.json({
-          success: true,
-          platform,
-          title: info.videoDetails.title || 'YouTube Audio',
-          author: info.videoDetails.author?.name || 'YouTube Creator',
-          thumbnail: bestThumb,
-          duration,
-          audioUrl: audioFormat.url,
-          proxyAudioUrl: `/api/media/stream?url=${encodeURIComponent(audioFormat.url)}`,
-        });
-      } catch (ytErr: any) {
-        return NextResponse.json(
-          { success: false, error: 'Error memproses YouTube: ' + ytErr.message },
-          { status: 500 }
-        );
+      } catch (ytdlErr: any) {
+        console.warn('VisionOS Ytdl failed, attempting fallback...', ytdlErr?.message);
       }
+
+      // Method B: Fallback to YouTube oEmbed + Invidious instance
+      if (ytVideoId) {
+        try {
+          const oembedRes = await fetch(
+            `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${ytVideoId}&format=json`
+          );
+          if (oembedRes.ok) {
+            const oembed = await oembedRes.json();
+            // Try invidious public audio stream
+            const invidiousRes = await fetch(
+              `https://invidious.nerdvpn.de/api/v1/videos/${ytVideoId}`,
+              { cache: 'no-store' }
+            );
+            if (invidiousRes.ok) {
+              const invData = await invidiousRes.json();
+              const invFormat = (invData.adaptiveFormats || []).find(
+                (f: any) => f.type && f.type.startsWith('audio') && f.url
+              );
+              if (invFormat && invFormat.url) {
+                return NextResponse.json({
+                  success: true,
+                  platform: rawUrl.includes('music.youtube.com') ? 'youtube_music' : 'youtube',
+                  title: oembed.title || invData.title,
+                  author: oembed.author_name || invData.author,
+                  thumbnail: `https://i.ytimg.com/vi/${ytVideoId}/hqdefault.jpg`,
+                  duration: invData.lengthSeconds || 0,
+                  audioUrl: invFormat.url,
+                  proxyAudioUrl: `/api/media/stream?url=${encodeURIComponent(invFormat.url)}`,
+                });
+              }
+            }
+          }
+        } catch (fbErr: any) {
+          console.warn('Fallback stream failed:', fbErr);
+        }
+      }
+
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            'Gagal mengekstrak audio dari link YouTube ini. Pastikan video tidak di-private atau berumur 18+.',
+        },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json(
