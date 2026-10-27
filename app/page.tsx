@@ -194,13 +194,35 @@ export default function Home() {
       }
     } catch (e) {}
 
-    // 2. Fetch live data from backend (with safe fallback to localStorage)
+    // 2. Fetch live data from backend (with safe fallback to localStorage & direct GitHub CDN)
     async function fetchLiveAssets() {
       try {
-        const res = await fetch('/api/assets?t=' + Date.now());
-        const json = await res.json();
-        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-          const cleanData = json.data.filter((a: Asset) => !deletedIds.includes(a.id));
+        let serverProducts: Asset[] = [];
+        try {
+          const res = await fetch('/api/assets?t=' + Date.now(), { cache: 'no-store' });
+          if (res.ok) {
+            const json = await res.json();
+            if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+              serverProducts = json.data;
+            }
+          }
+        } catch (e) {}
+
+        // Fallback directly to GitHub Raw CDN if /api/assets was empty or delayed
+        if (serverProducts.length === 0) {
+          try {
+            const ghRes = await fetch('https://raw.githubusercontent.com/QuantumHub-QH/mchlern/main/data/products.json?t=' + Date.now(), { cache: 'no-store' });
+            if (ghRes.ok) {
+              const ghJson = await ghRes.json();
+              if (Array.isArray(ghJson) && ghJson.length > 0) {
+                serverProducts = ghJson;
+              }
+            }
+          } catch (e) {}
+        }
+
+        if (serverProducts.length > 0) {
+          const cleanData = serverProducts.filter((a: Asset) => !deletedIds.includes(a.id));
           if (cleanData.length > 0) {
             // Read local saved products to retain any download count or un-synced product
             let localCache: Asset[] = [];

@@ -1,3 +1,7 @@
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
+
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
@@ -106,6 +110,13 @@ export async function POST(request: NextRequest) {
         `feat(catalog): bulk publish ${bulkList.length} products to public catalog [skip ci]`
       );
 
+      if (!syncRes.success) {
+        return NextResponse.json(
+          { success: false, error: syncRes.message, data: bulkList },
+          { status: 400 }
+        );
+      }
+
       return NextResponse.json({
         success: true,
         message: `Berhasil sinkronisasi ${bulkList.length} produk ke publik!`,
@@ -125,7 +136,7 @@ export async function POST(request: NextRequest) {
     // Read current catalog from GitHub/local
     const currentProducts = await getProducts();
 
-    // Merge map: current server products + client's active products (prevents accidental wiping)
+    // Merge map: current server products + new product
     const productMap = new Map<string, Asset>();
     for (const p of currentProducts) {
       if (p && p.id) productMap.set(p.id, p);
@@ -142,9 +153,9 @@ export async function POST(request: NextRequest) {
     const nowIso = new Date().toISOString();
     const formattedProduct: Asset = {
       id: productData.id || `asset-${Date.now()}`,
-      title: productData.title.trim(),
-      description: productData.description.trim(),
-      category: productData.category,
+      title: (productData.title || '').trim(),
+      description: (productData.description || '').trim(),
+      category: productData.category || 'layout-map',
       subcategory: productData.subcategory?.trim() || 'General',
       format: productData.format || 'RBXM',
       thumbnail: productData.thumbnail || 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80',
@@ -172,9 +183,8 @@ export async function POST(request: NextRequest) {
     // Insert or update in map
     productMap.set(formattedProduct.id, formattedProduct);
 
-    // Turn map into list (newest first or preserving order)
+    // Turn map into list (newest first)
     const updatedList = Array.from(productMap.values());
-    // Ensure the new/updated product is prominent
     const finalList = [
       formattedProduct,
       ...updatedList.filter((p) => p.id !== formattedProduct.id),
@@ -199,9 +209,20 @@ export async function POST(request: NextRequest) {
       `feat(catalog): add/update "${formattedProduct.title}" [skip ci]`
     );
 
+    if (!syncRes.success) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Gagal menyimpan ke GitHub: ${syncRes.message}`,
+          data: finalList,
+        },
+        { status: 400 }
+      );
+    }
+
     return NextResponse.json({
       success: true,
-      message: syncRes.message || 'Produk berhasil disimpan ke Cloud & GitHub!',
+      message: syncRes.message || 'Produk berhasil di-publish ke publik!',
       data: finalList,
       syncedWithGitHub: syncRes.success,
     });
@@ -242,7 +263,10 @@ export async function DELETE(request: NextRequest) {
     writeLocal(updatedList);
 
     // 3. Commit to GitHub
-    const syncRes = await commitProductsToGitHub(updatedList, token || undefined, `chore(catalog): delete asset ${id} [skip ci]`
+    const syncRes = await commitProductsToGitHub(
+      updatedList,
+      token || undefined,
+      `chore(catalog): delete asset ${id} [skip ci]`
     );
 
     return NextResponse.json({
