@@ -287,18 +287,6 @@ export default function AdminPanelPage() {
         }
       } catch (e) {}
 
-      // Fallback check GitHub raw if server returned empty
-      if (cleanServerData.length === 0) {
-        try {
-          const ghRes = await fetch('https://raw.githubusercontent.com/QuantumHub-QH/mchlern/main/data/products.json?t=' + Date.now(), { cache: 'no-store' });
-          if (ghRes.ok) {
-            const ghData = await ghRes.json();
-            if (Array.isArray(ghData)) {
-              cleanServerData = ghData.filter((p: Asset) => !deletedIds.includes(p.id));
-            }
-          }
-        } catch (e) {}
-      }
 
       const liveIds = new Set(cleanServerData.map((p) => p.id));
       setLiveProductIds(liveIds);

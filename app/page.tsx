@@ -208,19 +208,6 @@ export default function Home() {
           }
         } catch (e) {}
 
-        // Fallback directly to GitHub Raw CDN if /api/assets was empty or delayed
-        if (serverProducts.length === 0) {
-          try {
-            const ghRes = await fetch('https://raw.githubusercontent.com/QuantumHub-QH/mchlern/main/data/products.json?t=' + Date.now(), { cache: 'no-store' });
-            if (ghRes.ok) {
-              const ghJson = await ghRes.json();
-              if (Array.isArray(ghJson) && ghJson.length > 0) {
-                serverProducts = ghJson;
-              }
-            }
-          } catch (e) {}
-        }
-
         if (serverProducts.length > 0) {
           const cleanData = serverProducts.filter((a: Asset) => !deletedIds.includes(a.id));
           if (cleanData.length > 0) {
