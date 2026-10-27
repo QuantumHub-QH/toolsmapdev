@@ -176,13 +176,20 @@ export default function AdminPanelPage() {
         } catch (e) {}
       }
 
-      // 2. Fetch from backend
+      // 2. Fetch from backend (preserve local cache if server is empty)
       const res = await fetch('/api/admin-panel/products?t=' + Date.now());
       const data = await res.json();
       if (data.success && Array.isArray(data.data)) {
         const cleanServerData = data.data.filter((p: Asset) => !deletedIds.includes(p.id));
-        setProducts(cleanServerData);
-        localStorage.setItem('mapdev_saved_products', JSON.stringify(cleanServerData));
+        if (cleanServerData.length > 0) {
+          setProducts(cleanServerData);
+          localStorage.setItem('mapdev_saved_products', JSON.stringify(cleanServerData));
+        } else if (localProducts.length > 0) {
+          // Keep local products so they don't disappear on refresh when serverless has delay
+          setProducts(localProducts);
+        } else {
+          setProducts([]);
+        }
       }
     } catch (err) {
       console.error(err);
@@ -246,6 +253,36 @@ export default function AdminPanelPage() {
     }
   };
 
+  const handleTestToken = async () => {
+    if (!githubToken.trim()) {
+      alert('Masukkan token GitHub terlebih dahulu.');
+      return;
+    }
+    setSyncing(true);
+    try {
+      const res = await fetch('https://api.github.com/repos/QuantumHub-QH/mchlern', {
+        headers: {
+          Authorization: `Bearer ${githubToken.trim()}`,
+          Accept: 'application/vnd.github.v3+json',
+        },
+      });
+      if (res.ok) {
+        localStorage.setItem('mapdev_github_token', githubToken.trim());
+        alert('✅ Token GitHub VALID! Terhubung ke repo QuantumHub-QH/mchlern.');
+      } else if (res.status === 401) {
+        alert('❌ Token tidak valid / kadaluarsa (HTTP 401). Buat token baru di GitHub Settings.');
+      } else if (res.status === 404) {
+        alert('❌ Repo tidak ditemukan atau token tidak punya izin "repo" (HTTP 404).');
+      } else {
+        alert(`Respon GitHub: HTTP ${res.status}`);
+      }
+    } catch (e: any) {
+      alert('Error saat menguji token: ' + e.message);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     setSyncing(true);
@@ -275,6 +312,27 @@ export default function AdminPanelPage() {
       license: 'Free Community Asset',
     };
 
+    // 1. Immediately update local state & localStorage so product NEVER disappears
+    const currentList = [...products];
+    const existingIndex = currentList.findIndex((p) => p.id === productPayload.id);
+    let updatedLocalList: Asset[];
+    const nowIso = new Date().toISOString();
+    const formattedLocal: Asset = {
+      ...productPayload,
+      creator: { name: productPayload.creatorName, verified: true },
+      stats: existingIndex >= 0 ? currentList[existingIndex].stats : { downloads: 0, favorites: 0, views: 1 },
+      updatedAt: nowIso,
+    };
+    if (existingIndex >= 0) {
+      updatedLocalList = [...currentList];
+      updatedLocalList[existingIndex] = formattedLocal;
+    } else {
+      updatedLocalList = [formattedLocal, ...currentList];
+    }
+    setProducts(updatedLocalList);
+    localStorage.setItem('mapdev_saved_products', JSON.stringify(updatedLocalList));
+
+    // 2. Synchronize to GitHub via API
     try {
       const res = await fetch('/api/admin-panel/products', {
         method: 'POST',
@@ -286,27 +344,32 @@ export default function AdminPanelPage() {
       if (res.ok && data.success) {
         setStatusMessage({
           type: 'success',
-          text: data.message || '✅ Produk berhasil disimpan dan disinkronkan ke web publik!',
+          text: data.message || '✅ Produk berhasil disimpan permanen ke GitHub!',
         });
-        setProducts(data.data);
-        localStorage.setItem('mapdev_saved_products', JSON.stringify(data.data));
+        if (data.data && Array.isArray(data.data)) {
+          setProducts(data.data);
+          localStorage.setItem('mapdev_saved_products', JSON.stringify(data.data));
+        }
         resetForm();
       } else {
+        // Backend couldn't commit to GitHub (e.g. no token), but local is preserved
+        setShowTokenInput(true);
         setStatusMessage({
           type: 'error',
-          text: data.error || 'Gagal menyimpan produk',
+          text: (data.error || 'Gagal commit ke GitHub.') + ' Produk telah disimpan di browser ini. Agar tidak hilang saat redeploy, pastikan token GitHub di bawah valid!',
         });
+        resetForm();
       }
     } catch (err: any) {
       setStatusMessage({
         type: 'error',
-        text: err.message || 'Gagal mengirim data',
+        text: 'Produk tersimpan di browser, tapi koneksi ke cloud gagal: ' + err.message,
       });
+      resetForm();
     } finally {
       setSyncing(false);
     }
   };
-
   const handleDeleteProduct = async (id: string) => {
     if (!confirm('Yakin ingin menghapus produk ini dari katalog?')) return;
 
@@ -616,9 +679,17 @@ export default function AdminPanelPage() {
 
         {/* GitHub Token Config Dropdown */}
         {showTokenInput && (
-          <div className="rounded-xl border border-zinc-700 bg-black/80 p-4 space-y-2 text-xs font-mono animate-fade-in">
-            <label className="block text-zinc-300">GitHub Personal Access Token (Untuk Sinkronisasi Otomatis):</label>
-            <div className="flex items-center gap-2">
+          <div className="rounded-xl border border-zinc-700 bg-black/90 p-4 space-y-3 text-xs font-mono animate-fade-in shadow-xl">
+            <div className="flex items-center justify-between">
+              <label className="block text-zinc-200 font-bold">
+                GitHub Personal Access Token (PAT) untuk Auto-Commit:
+              </label>
+              <span className="text-[10px] text-zinc-400">
+                Repo: QuantumHub-QH/mchlern
+              </span>
+            </div>
+            
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
               <input
                 type="password"
                 value={githubToken}
@@ -626,20 +697,37 @@ export default function AdminPanelPage() {
                   setGithubToken(e.target.value);
                   localStorage.setItem('mapdev_github_token', e.target.value);
                 }}
-                className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-white"
+                className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-white placeholder-zinc-600 focus:border-white focus:outline-none"
                 placeholder="ghp_..."
               />
               <button
                 type="button"
-                onClick={() => alert('Token berhasil disimpan!')}
-                className="rounded-lg bg-white px-4 py-2 font-bold text-black hover:bg-zinc-200"
+                onClick={() => {
+                  localStorage.setItem('mapdev_github_token', githubToken.trim());
+                  alert('Token berhasil disimpan di browser!');
+                }}
+                className="rounded-lg bg-white px-4 py-2 font-bold text-black hover:bg-zinc-200 transition-colors"
               >
                 Simpan
               </button>
+              <button
+                type="button"
+                onClick={handleTestToken}
+                className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 font-bold text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+              >
+                Test Token
+              </button>
             </div>
-            <p className="text-[10px] text-zinc-500">
-              Token ini digunakan untuk auto-commit produk baru ke <code>data/products.json</code> di repo kamu.
-            </p>
+            
+            <div className="rounded-lg bg-zinc-950 p-2.5 text-[11px] text-zinc-400 space-y-1">
+              <p className="text-zinc-300 font-semibold">💡 Cara Buat GitHub Token (sekali buat, aktif selamanya):</p>
+              <p>1. Buka <strong>github.com/settings/tokens</strong> (Classic Token)</p>
+              <p>2. Klik <strong>Generate new token (classic)</strong>, centang scope <strong>repo</strong> (Full control of private repositories)</p>
+              <p>3. Copy token <code>ghp_...</code>, paste ke kotak di atas lalu klik <strong>Simpan</strong> & <strong>Test Token</strong>.</p>
+              <p className="text-emerald-400 pt-1">
+                ⭐ <em>Tips Vercel:</em> Masukkan juga token ini di <strong>Vercel Settings ➔ Environment Variables</strong> dengan nama <code>GITHUB_TOKEN</code> agar otomatis jalan di semua device!
+              </p>
+            </div>
           </div>
         )}
 

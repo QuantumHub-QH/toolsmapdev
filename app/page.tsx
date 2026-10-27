@@ -198,15 +198,27 @@ export default function Home() {
       }
     } catch (e) {}
 
-    // 2. Fetch live data from backend
+    // 2. Fetch live data from backend (with safe fallback to localStorage)
     async function fetchLiveAssets() {
       try {
         const res = await fetch('/api/assets?t=' + Date.now());
         const json = await res.json();
-        if (json.success && Array.isArray(json.data)) {
+        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
           const cleanData = json.data.filter((a: Asset) => !deletedIds.includes(a.id));
-          setAssetsList(cleanData);
-          localStorage.setItem('mapdev_saved_products', JSON.stringify(cleanData));
+          if (cleanData.length > 0) {
+            setAssetsList(cleanData);
+            localStorage.setItem('mapdev_saved_products', JSON.stringify(cleanData));
+            return;
+          }
+        }
+        
+        // If /api/assets returned empty, keep local storage so products don't disappear on refresh
+        const local = localStorage.getItem('mapdev_saved_products');
+        if (local) {
+          const parsed = JSON.parse(local);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setAssetsList(parsed.filter((a: Asset) => !deletedIds.includes(a.id)));
+          }
         }
       } catch (err) {
         console.error('Failed to fetch live assets:', err);
