@@ -53,6 +53,16 @@ function createPublishBatches(products: Asset[]): Asset[][] {
   return batches;
 }
 
+function saveProductsCache(products: Asset[]): boolean {
+  try {
+    localStorage.setItem('mapdev_saved_products', JSON.stringify(products));
+    return true;
+  } catch (error) {
+    console.warn('Browser storage is full; products remain available from the server.', error);
+    return false;
+  }
+}
+
 async function publishRequest(
   payload: { product: Record<string, unknown> } | { bulkProducts: Asset[] },
   sessionToken: string | null
@@ -254,7 +264,7 @@ export default function AdminPanelPage() {
       }
       const mergedList = Array.from(mergedMap.values());
       setProducts(mergedList);
-      localStorage.setItem('mapdev_saved_products', JSON.stringify(mergedList));
+      saveProductsCache(mergedList);
     } catch (err) {
       console.error(err);
     } finally {
@@ -351,9 +361,10 @@ export default function AdminPanelPage() {
 
       setStatusMessage({
         type: 'success',
-        text: `🚀 Berhasil! ${pendingProducts.length} produk sekarang live di web publik.`,
+        text: saveProductsCache(products)
+          ? `🚀 Berhasil! ${pendingProducts.length} produk sekarang live di web publik.`
+          : `🚀 Berhasil! ${pendingProducts.length} produk sudah live. Cache browser penuh, tetapi katalog tersimpan di server.`,
       });
-      localStorage.setItem('mapdev_saved_products', JSON.stringify(products));
     } catch (e: any) {
       setStatusMessage({
         type: 'error',
@@ -421,7 +432,7 @@ export default function AdminPanelPage() {
       updatedLocalList = [formattedLocal, ...currentList];
     }
     setProducts(updatedLocalList);
-    localStorage.setItem('mapdev_saved_products', JSON.stringify(updatedLocalList));
+    const isCacheSaved = saveProductsCache(updatedLocalList);
 
     try {
       const sessionToken = sessionStorage.getItem('admin_panel_session');
@@ -430,7 +441,9 @@ export default function AdminPanelPage() {
       setLiveProductIds((current) => new Set([...current, formattedLocal.id]));
       setStatusMessage({
         type: 'success',
-        text: `🚀 Produk "${productPayload.title}" berhasil dipublish ke web publik.`,
+        text: isCacheSaved
+          ? `🚀 Produk "${productPayload.title}" berhasil dipublish ke web publik.`
+          : `🚀 Produk "${productPayload.title}" berhasil dipublish. Cache browser penuh, tetapi produk tersimpan di server.`,
       });
       resetForm();
     } catch (err: any) {
@@ -459,7 +472,7 @@ export default function AdminPanelPage() {
     // 2. Immediately update local UI and local cache
     setProducts((prev) => {
       const next = prev.filter((p) => p.id !== id);
-      localStorage.setItem('mapdev_saved_products', JSON.stringify(next));
+      saveProductsCache(next);
       return next;
     });
 
