@@ -202,17 +202,41 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
     }
   }, []);
 
-  // Fetch / Sync Daily Quota for Discord User
+  // Fetch / Sync Daily Quota for Discord User with local persistence
   const fetchDailyQuota = async () => {
     if (!discordUser || !discordUser.id) return;
+    const today = new Date().toISOString().split('T')[0];
+    const storageKey = `mapdev_quota_${discordUser.id}_${today}`;
+    
+    // 1. Instant load from localStorage so it never resets on refresh
+    let localUsed = 0;
     try {
-      const res = await fetch(`/api/roblox/limit?discordId=${encodeURIComponent(discordUser.id)}`);
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        localUsed = parseInt(saved, 10) || 0;
+        setDailyQuota({
+          limit: 10,
+          used: localUsed,
+          remaining: Math.max(0, 10 - localUsed),
+        });
+      }
+    } catch (e) {}
+
+    // 2. Fetch live from backend & GitHub
+    try {
+      const ghToken = localStorage.getItem('mapdev_github_token') || '';
+      const res = await fetch(`/api/roblox/limit?discordId=${encodeURIComponent(discordUser.id)}`, {
+        headers: ghToken ? { 'x-github-token': ghToken } : {},
+      });
       const data = await res.json();
       if (data.success) {
+        // Take whichever used is higher so quota NEVER resets backward on refresh
+        const actualUsed = Math.max(data.used || 0, localUsed);
+        localStorage.setItem(storageKey, String(actualUsed));
         setDailyQuota({
-          limit: data.limit || 10,
-          used: data.used || 0,
-          remaining: data.remaining ?? 10,
+          limit: 10,
+          used: actualUsed,
+          remaining: Math.max(0, 10 - actualUsed),
         });
       }
     } catch (e) {
@@ -494,19 +518,38 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
             )
           );
 
-          // Decrement daily limit permanently via API
+          // Decrement daily limit immediately in localStorage & sync to API
           try {
+            const today = new Date().toISOString().split('T')[0];
+            const storageKey = `mapdev_quota_${discordUser.id}_${today}`;
+            const currentSaved = parseInt(localStorage.getItem(storageKey) || '0', 10);
+            const newUsed = currentSaved + 1;
+            localStorage.setItem(storageKey, String(newUsed));
+            
+            // Immediate state update
+            setDailyQuota({
+              limit: 10,
+              used: newUsed,
+              remaining: Math.max(0, 10 - newUsed),
+            });
+
+            const ghToken = localStorage.getItem('mapdev_github_token') || '';
             const limitRes = await fetch('/api/roblox/limit', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ discordId: discordUser.id, count: 1 }),
+              headers: { 
+                'Content-Type': 'application/json',
+                ...(ghToken ? { 'x-github-token': ghToken } : {})
+              },
+              body: JSON.stringify({ discordId: discordUser.id, count: 1, token: ghToken }),
             });
             const limitData = await limitRes.json();
             if (limitData.success) {
+              const maxUsed = Math.max(limitData.used, newUsed);
+              localStorage.setItem(storageKey, String(maxUsed));
               setDailyQuota({
                 limit: limitData.limit,
-                used: limitData.used,
-                remaining: limitData.remaining,
+                used: maxUsed,
+                remaining: Math.max(0, limitData.limit - maxUsed),
               });
             }
           } catch (e) {

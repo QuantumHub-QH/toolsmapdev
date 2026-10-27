@@ -46,8 +46,8 @@ function writeLimitsLocal(data: Record<string, { date: string; used: number }>) 
   } catch (e) {}
 }
 
-async function syncLimitsToGitHub(data: Record<string, { date: string; used: number }>) {
-  const token = process.env.GITHUB_TOKEN;
+async function syncLimitsToGitHub(data: Record<string, { date: string; used: number }>, clientToken?: string) {
+  const token = clientToken || process.env.GITHUB_TOKEN;
   if (!token) return;
   try {
     const getRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`, {
@@ -120,6 +120,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const discordId = body.discordId;
     const count = parseInt(body.count || 1, 10);
+    const clientToken = body.token || request.headers.get('x-github-token') || undefined;
 
     if (!discordId) {
       return NextResponse.json({ success: false, error: 'Discord ID diperlukan' }, { status: 400 });
@@ -141,7 +142,7 @@ export async function POST(request: NextRequest) {
     };
 
     writeLimitsLocal(limitsMap);
-    syncLimitsToGitHub(limitsMap);
+    syncLimitsToGitHub(limitsMap, clientToken);
 
     const remaining = Math.max(0, DAILY_LIMIT - newUsed);
 
