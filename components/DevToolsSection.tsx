@@ -187,6 +187,23 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
 
+  // Media URL Fetch State (YouTube, TikTok, YouTube Music)
+  const [urlInput, setUrlInput] = useState('');
+  const [isFetchingUrl, setIsFetchingUrl] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [fetchedMedia, setFetchedMedia] = useState<{
+    platform: 'youtube' | 'youtube_music' | 'tiktok';
+    title: string;
+    author: string;
+    thumbnail: string;
+    duration: number;
+    audioUrl: string;
+    proxyAudioUrl: string;
+  } | null>(null);
+  const [isAddingFetched, setIsAddingFetched] = useState(false);
+  const [isPlayingFetched, setIsPlayingFetched] = useState(false);
+  const fetchedAudioPlayerRef = useRef<HTMLAudioElement | null>(null);
+
   // Load saved Roblox session on mount
   useEffect(() => {
     try {
@@ -258,6 +275,131 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
     // If playing preview, update live playback rate
     if (audioPlayerRef.current) {
       audioPlayerRef.current.playbackRate = speed;
+    }
+  };
+
+  // Format seconds to mm:ss
+  const formatDuration = (seconds: number) => {
+    if (!seconds || isNaN(seconds)) return '0:00';
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  };
+
+  // Fetch audio info from YouTube, TikTok, or YouTube Music URL
+  const handleFetchMediaUrl = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const targetUrl = urlInput.trim();
+    if (!targetUrl) {
+      setFetchError('Masukkan URL YouTube, YouTube Music, atau TikTok terlebih dahulu.');
+      return;
+    }
+
+    setIsFetchingUrl(true);
+    setFetchError(null);
+    setFetchedMedia(null);
+    if (fetchedAudioPlayerRef.current) {
+      fetchedAudioPlayerRef.current.pause();
+      setIsPlayingFetched(false);
+    }
+
+    try {
+      const res = await fetch('/api/media/fetch-audio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: targetUrl }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setFetchedMedia(data);
+      } else {
+        setFetchError(data.error || 'Gagal mengambil audio dari link tersebut.');
+      }
+    } catch (err: any) {
+      setFetchError('Koneksi gagal: ' + err.message);
+    } finally {
+      setIsFetchingUrl(false);
+    }
+  };
+
+  // Add fetched audio directly to the upload queue (applies DSP bypass settings)
+  const handleAddFetchedToQueue = async () => {
+    if (!fetchedMedia) return;
+
+    if (!discordUser) {
+      onOpenDiscordAuth();
+      return;
+    }
+
+    if (dailyQuota.remaining <= 0) {
+      alert('Kuota upload hari ini sudah habis (10/10). Kuota akan reset kembali pada jam 00:00!');
+      return;
+    }
+
+    if (audioQueue.length >= 10) {
+      alert('Maksimal 10 file audio dalam satu antrean batch!');
+      return;
+    }
+
+    setIsAddingFetched(true);
+
+    try {
+      const res = await fetch(fetchedMedia.proxyAudioUrl);
+      if (!res.ok) {
+        throw new Error(`Gagal mendownload audio stream (HTTP ${res.status})`);
+      }
+      const blob = await res.blob();
+      const ext = fetchedMedia.platform === 'tiktok' ? '.mp3' : '.webm';
+      const cleanTitle = fetchedMedia.title.replace(/[^a-zA-Z0-9_\-\s]/g, '').trim() || 'stream_audio';
+      const fileName = `${cleanTitle}${ext}`;
+      const file = new File([blob], fileName, { type: blob.type || 'audio/mpeg' });
+
+      const newQueueItem: UploadQueueItem = {
+        id: `fetched-${Date.now()}`,
+        file,
+        name: fileName,
+        size: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
+        type: 'Audio',
+        speed: audioSpeed,
+        pitch: audioPitch,
+        volume: audioVolume,
+        status: 'pending',
+        previewUrl: URL.createObjectURL(file),
+      };
+
+      setAudioQueue((prev) => [...prev, newQueueItem]);
+      setFetchedMedia(null);
+      setUrlInput('');
+      if (fetchedAudioPlayerRef.current) {
+        fetchedAudioPlayerRef.current.pause();
+        setIsPlayingFetched(false);
+      }
+    } catch (err: any) {
+      alert('Gagal menambahkan ke antrean: ' + err.message);
+    } finally {
+      setIsAddingFetched(false);
+    }
+  };
+
+  // Toggle play audio preview for fetched media
+  const togglePlayFetchedPreview = () => {
+    if (!fetchedMedia || !fetchedAudioPlayerRef.current) return;
+    if (isPlayingFetched) {
+      fetchedAudioPlayerRef.current.pause();
+      setIsPlayingFetched(false);
+    } else {
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.pause();
+        setPlayingAudioId(null);
+      }
+      fetchedAudioPlayerRef.current.src = fetchedMedia.proxyAudioUrl;
+      fetchedAudioPlayerRef.current.playbackRate = audioSpeed;
+      fetchedAudioPlayerRef.current.volume = audioVolume / 100;
+      fetchedAudioPlayerRef.current
+        .play()
+        .then(() => setIsPlayingFetched(true))
+        .catch(() => setIsPlayingFetched(false));
     }
   };
 
@@ -1126,6 +1268,174 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                   <span>Batch Saat Ini: {audioQueue.length} / 10 Audio • Sisa Kuota Hari Ini: {dailyQuota.remaining}</span>
                 </div>
               </label>
+            </div>
+
+{/* Divider OR / ATAU */}
+            <div className="flex items-center gap-4 my-2">
+              <div className="h-px bg-zinc-800 flex-1" />
+              <span className="text-[11px] font-mono font-bold text-zinc-500 uppercase">
+                ATAU SALIN LINK MEDIA
+              </span>
+              <div className="h-px bg-zinc-800 flex-1" />
+            </div>
+
+            {/* Fetch Audio from YouTube / TikTok / YouTube Music */}
+            <div className="rounded-2xl border border-zinc-800 bg-[#101014] p-5 space-y-4 shadow-xl">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="h-8 w-8 rounded-lg bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400">
+                    <Music className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-mono font-bold text-white uppercase tracking-wider">
+                      Fetch Audio dari Link (YouTube, TikTok, YT Music)
+                    </h3>
+                    <p className="text-[11px] text-zinc-400">
+                      Tempel link video/lagu, sistem otomatis mengambil thumbnail, judul, durasi & audio stream.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="hidden sm:flex items-center gap-2">
+                  <span className="text-[10px] font-mono text-red-400 border border-red-500/30 bg-red-500/10 px-2 py-0.5 rounded">
+                    YouTube
+                  </span>
+                  <span className="text-[10px] font-mono text-cyan-400 border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 rounded">
+                    TikTok
+                  </span>
+                  <span className="text-[10px] font-mono text-purple-400 border border-purple-500/30 bg-purple-500/10 px-2 py-0.5 rounded">
+                    YT Music
+                  </span>
+                </div>
+              </div>
+
+              <form onSubmit={handleFetchMediaUrl} className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                <div className="relative flex-1">
+                  <input
+                    type="url"
+                    value={urlInput}
+                    onChange={(e) => setUrlInput(e.target.value)}
+                    placeholder="https://www.youtube.com/watch?v=... atau https://vt.tiktok.com/..."
+                    className="w-full rounded-xl border border-zinc-700 bg-black px-4 py-2.5 text-xs text-white placeholder-zinc-600 focus:border-white focus:outline-none font-mono"
+                  />
+                  {urlInput && (
+                    <button
+                      type="button"
+                      onClick={() => setUrlInput('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white text-xs"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isFetchingUrl || !urlInput.trim()}
+                  className="rounded-xl bg-blue-600 hover:bg-blue-500 px-5 py-2.5 text-xs font-mono font-bold text-white transition-all shadow-md active:scale-95 disabled:opacity-40 flex items-center justify-center gap-2 shrink-0"
+                >
+                  {isFetchingUrl ? (
+                    <>
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                      <span>Mengambil Audio...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="h-3.5 w-3.5" />
+                      <span>Fetch Audio</span>
+                    </>
+                  )}
+                </button>
+              </form>
+
+              {fetchError && (
+                <div className="flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400 font-mono">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  <span>{fetchError}</span>
+                </div>
+              )}
+
+              {/* Fetched Media Result Card */}
+              {fetchedMedia && (
+                <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 animate-fade-in">
+                  <div className="flex items-center gap-3 min-w-0">
+                    {fetchedMedia.thumbnail && (
+                      <div className="relative h-16 w-24 rounded-lg overflow-hidden border border-zinc-800 bg-black shrink-0">
+                        <img
+                          src={fetchedMedia.thumbnail}
+                          alt={fetchedMedia.title}
+                          className="h-full w-full object-cover"
+                        />
+                        <span className="absolute bottom-1 right-1 rounded bg-black/80 px-1 py-0.2 text-[9px] font-mono font-bold text-white">
+                          {formatDuration(fetchedMedia.duration)}
+                        </span>
+                      </div>
+                    )}
+
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] font-mono px-2 py-0.2 rounded font-bold uppercase ${
+                          fetchedMedia.platform === 'tiktok'
+                            ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
+                            : fetchedMedia.platform === 'youtube_music'
+                            ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
+                            : 'bg-red-500/20 text-red-400 border border-red-500/30'
+                        }`}>
+                          {fetchedMedia.platform === 'tiktok' ? 'TikTok' : fetchedMedia.platform === 'youtube_music' ? 'YouTube Music' : 'YouTube'}
+                        </span>
+                        <span className="text-[11px] font-mono text-zinc-400 truncate">
+                          {fetchedMedia.author}
+                        </span>
+                      </div>
+                      <h4 className="text-xs font-bold text-white truncate max-w-md font-mono">
+                        {fetchedMedia.title}
+                      </h4>
+                      <p className="text-[10px] font-mono text-emerald-400">
+                        ✓ Audio Stream Siap Dimainkan & Di-upload
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 w-full md:w-auto shrink-0">
+                    <button
+                      type="button"
+                      onClick={togglePlayFetchedPreview}
+                      className="flex-1 md:flex-none flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 hover:border-zinc-500 px-3.5 py-2 text-xs font-mono text-zinc-200 transition-colors"
+                    >
+                      {isPlayingFetched ? (
+                        <>
+                          <Pause className="h-3.5 w-3.5 text-blue-400" />
+                          <span>Pause</span>
+                        </>
+                      ) : (
+                        <>
+                          <Play className="h-3.5 w-3.5 text-blue-400" />
+                          <span>Preview Audio</span>
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleAddFetchedToQueue}
+                      disabled={isAddingFetched || dailyQuota.remaining <= 0 || audioQueue.length >= 10}
+                      className="flex-1 md:flex-none flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-xs font-mono font-bold text-white transition-all shadow-md active:scale-95 disabled:opacity-40"
+                    >
+                      {isAddingFetched ? (
+                        <>
+                          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                          <span>Memasukkan...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="h-3.5 w-3.5" />
+                          <span>+ Tambah ke Antrean</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Audio Queue Management */}

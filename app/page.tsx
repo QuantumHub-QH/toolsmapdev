@@ -26,54 +26,50 @@ export default function Home() {
 
   // Discord Authorization State
   const [discordUser, setDiscordUser] = useState<DiscordUser | null>(null);
+  const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [isDiscordModalOpen, setIsDiscordModalOpen] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Load Discord user session or auto-trigger authorize popup
+  // Load Discord user session strictly (Zero access without Discord)
   useEffect(() => {
     try {
-      // Check if returning from Discord OAuth2 callback
       const urlParams = new URLSearchParams(window.location.search);
       const discordUserParam = urlParams.get('discord_user');
       const discordError = urlParams.get('discord_error');
 
       if (discordUserParam) {
-        // Successfully returned from Discord OAuth2
-        const parsed = JSON.parse(decodeURIComponent(discordUserParam));
-        if (parsed && parsed.isAuthorized) {
-          setDiscordUser(parsed);
-          localStorage.setItem('mapdev_discord_user', JSON.stringify(parsed));
-          showToast(`Welcome, @${parsed.username}! Discord connected ✓`);
-          // Clean up URL params
-          window.history.replaceState({}, '', '/');
-          return;
-        }
+        try {
+          const parsed = JSON.parse(decodeURIComponent(discordUserParam));
+          if (parsed && parsed.isAuthorized) {
+            setDiscordUser(parsed);
+            localStorage.setItem('mapdev_discord_user', JSON.stringify(parsed));
+            window.history.replaceState({}, '', '/');
+            setIsAuthChecking(false);
+            return;
+          }
+        } catch (e) {}
       }
 
       if (discordError) {
-        // Discord auth failed or denied
-        showToast('Discord auth gagal atau dibatalkan. Coba lagi.');
         window.history.replaceState({}, '', '/');
       }
 
-      // Check existing session in localStorage
       const savedUser = localStorage.getItem('mapdev_discord_user');
       if (savedUser) {
-        const parsed = JSON.parse(savedUser);
-        if (parsed && parsed.isAuthorized) {
-          setDiscordUser(parsed);
-          return;
-        }
+        try {
+          const parsed = JSON.parse(savedUser);
+          if (parsed && parsed.isAuthorized) {
+            setDiscordUser(parsed);
+            setIsAuthChecking(false);
+            return;
+          }
+        } catch (e) {}
       }
-      // If not yet authorized with Discord, auto-trigger popup on entry
-      const timer = setTimeout(() => {
-        setIsDiscordModalOpen(true);
-      }, 600);
-      return () => clearTimeout(timer);
     } catch (e) {
       console.error('Error loading discord session:', e);
-      setIsDiscordModalOpen(true);
+    } finally {
+      setIsAuthChecking(false);
     }
   }, []);
 
@@ -304,6 +300,29 @@ export default function Home() {
   const bookmarkedAssets = useMemo(() => {
     return assetsList.filter((a) => bookmarkedIds.includes(a.id));
   }, [bookmarkedIds, assetsList]);
+
+  // Strict Auth Gate: Loading Screen while verifying session
+  if (isAuthChecking) {
+    return (
+      <div className="min-h-screen bg-[#08080a] flex flex-col items-center justify-center p-4 text-center">
+        <div className="h-10 w-10 border-2 border-[#5865F2] border-t-transparent rounded-full animate-spin mb-4" />
+        <p className="text-xs font-mono text-zinc-400 tracking-wider uppercase">Memverifikasi Otorisasi Discord...</p>
+      </div>
+    );
+  }
+
+  // Strict Auth Gate: Zero access if not authorized or logged out
+  if (!discordUser || !discordUser.isAuthorized) {
+    return (
+      <DiscordAuthModal
+        isOpen={true}
+        onClose={() => {}}
+        onAuthorize={(user) => {
+          setDiscordUser(user);
+        }}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
