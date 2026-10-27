@@ -191,7 +191,7 @@ export default function AdminPanelPage() {
     }
   };
 
-  // Upload Thumbnail Image — compress via canvas sebelum disimpan
+  // Upload Thumbnail Image - compress via canvas sebelum disimpan
   const handleImageFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
