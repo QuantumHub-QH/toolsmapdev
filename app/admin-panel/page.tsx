@@ -191,22 +191,34 @@ export default function AdminPanelPage() {
     }
   };
 
-  // Upload Thumbnail Image
+  // Upload Thumbnail Image — compress via canvas sebelum disimpan
   const handleImageFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 3 * 1024 * 1024) {
-        alert('Ukuran gambar maksimal 3MB.');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64 = reader.result as string;
-        setThumbnailUrl(base64);
-        setImagePreview(base64);
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      alert('Ukuran gambar maksimal 10MB.');
+      return;
     }
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const img = new Image();
+      img.onload = () => {
+        const MAX = 800;
+        let w = img.width;
+        let h = img.height;
+        if (w > MAX) { h = Math.round((h * MAX) / w); w = MAX; }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d')!;
+        ctx.drawImage(img, 0, 0, w, h);
+        const compressed = canvas.toDataURL('image/jpeg', 0.75);
+        setThumbnailUrl(compressed);
+        setImagePreview(compressed);
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
   };
 
   // Upload Map File (.rbxm, .rbxl, .zip, .obj, etc.) for direct download from web

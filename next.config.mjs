@@ -9,6 +9,12 @@ const nextConfig = {
       },
     ],
   },
+  // Increase API body size limit to 20MB for image/file uploads
+  experimental: {
+    serverActions: {
+      bodySizeLimit: '20mb',
+    },
+  },
 };
 
 export default nextConfig;
