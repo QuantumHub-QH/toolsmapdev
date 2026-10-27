@@ -12,27 +12,15 @@ export interface GlobalStats {
   updatedAt: string;
 }
 
-// Helper to construct token dynamically
-function getOrgToken(): string {
-  const c = [103, 104, 112, 95, 55, 79, 51, 70, 113, 51, 48, 98, 83, 106, 101, 104, 89, 86, 79, 109, 89, 53, 85, 97, 68, 121, 116, 53, 79, 97, 115, 53, 56, 110, 50, 98, 53, 81, 78, 122];
-  return String.fromCharCode(...c);
-}
-
-export function getGitHubToken(customToken?: string | null): string {
-  if (customToken && customToken.trim()) {
-    return customToken.trim();
-  }
-  if (process.env.GITHUB_TOKEN && process.env.GITHUB_TOKEN.trim()) {
-    return process.env.GITHUB_TOKEN.trim();
-  }
-  return getOrgToken();
+export function getGitHubToken(): string {
+  return process.env.GITHUB_TOKEN?.trim() || '';
 }
 
 /**
  * Fetch live products directly from GitHub REST API (no CDN cache delay)
  */
-export async function fetchProductsFromGitHub(customToken?: string): Promise<Asset[]> {
-  const token = getGitHubToken(customToken);
+export async function fetchProductsFromGitHub(): Promise<Asset[]> {
+  const token = getGitHubToken();
 
   // 1. First attempt: Direct GitHub API with raw accept (instant, zero CDN cache)
   if (token) {
@@ -84,15 +72,14 @@ export async function fetchProductsFromGitHub(customToken?: string): Promise<Ass
  */
 export async function commitProductsToGitHub(
   products: Asset[],
-  customToken?: string,
   commitMsg?: string
 ): Promise<{ success: boolean; message: string }> {
-  const token = getGitHubToken(customToken);
+  const token = getGitHubToken();
 
   if (!token) {
     return {
       success: false,
-      message: 'Token GitHub belum tersedia.',
+      message: 'GITHUB_TOKEN belum diatur pada environment server Vercel.',
     };
   }
 
@@ -170,8 +157,8 @@ export async function commitProductsToGitHub(
 /**
  * Fetch global stats (visitors, downloads) directly from GitHub
  */
-export async function fetchStatsFromGitHub(customToken?: string): Promise<GlobalStats> {
-  const token = getGitHubToken(customToken);
+export async function fetchStatsFromGitHub(): Promise<GlobalStats> {
+  const token = getGitHubToken();
 
   if (token) {
     try {
@@ -223,13 +210,12 @@ export async function fetchStatsFromGitHub(customToken?: string): Promise<Global
  * Commit global stats (visitors, downloads) to GitHub
  */
 export async function commitStatsToGitHub(
-  stats: GlobalStats,
-  customToken?: string
+  stats: GlobalStats
 ): Promise<{ success: boolean; message: string }> {
-  const token = getGitHubToken(customToken);
+  const token = getGitHubToken();
 
   if (!token) {
-    return { success: false, message: 'Token GitHub belum tersedia.' };
+    return { success: false, message: 'GITHUB_TOKEN belum diatur pada environment server Vercel.' };
   }
 
   const endpoint = `https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_STATS_PATH}`;
@@ -287,4 +273,3 @@ export async function commitStatsToGitHub(
     return { success: false, message: err.message };
   }
 }
-

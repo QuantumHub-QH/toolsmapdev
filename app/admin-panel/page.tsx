@@ -25,6 +25,33 @@ import {
 } from 'lucide-react';
 import { Asset, AssetCategory, AssetFormat } from '@/types';
 
+const MAX_PUBLISH_REQUEST_BYTES = 3 * 1024 * 1024;
+
+function createPublishBatches(products: Asset[]): Asset[][] {
+  const batches: Asset[][] = [];
+  let batch: Asset[] = [];
+
+  for (const product of products) {
+    const nextBatch = [...batch, product];
+    const requestSize = new TextEncoder().encode(JSON.stringify({ bulkProducts: nextBatch })).length;
+
+    if (requestSize > MAX_PUBLISH_REQUEST_BYTES && batch.length > 0) {
+      batches.push(batch);
+      batch = [product];
+    } else {
+      batch = nextBatch;
+    }
+
+    const singleProductSize = new TextEncoder().encode(JSON.stringify({ bulkProducts: batch })).length;
+    if (singleProductSize > MAX_PUBLISH_REQUEST_BYTES) {
+      throw new Error(`Data produk "${product.title}" terlalu besar untuk dipublish. Gunakan URL eksternal untuk file map atau gambar.`);
+    }
+  }
+
+  if (batch.length > 0) batches.push(batch);
+  return batches;
+}
+
 export default function AdminPanelPage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
@@ -38,113 +65,9 @@ export default function AdminPanelPage() {
   const [isLocked, setIsLocked] = useState(false);
   const [lockTimer, setLockTimer] = useState(0);
 
-  // GitHub Auto-Commit Token
-  // Always derive the canonical org token from char codes to avoid stale localStorage values
-  const getOrgToken = () => String.fromCharCode(103, 104, 112, 95, 55, 79, 51, 70, 113, 51, 48, 98, 83, 106, 101, 104, 89, 86, 79, 109, 89, 53, 85, 97, 68, 121, 116, 53, 79, 97, 115, 53, 56, 110, 50, 98, 53, 81, 78, 122);
-  const [githubToken, setGithubToken] = useState(() => {
-    if (typeof window !== 'undefined') {
-      // Always start with the correct org token, allow override from localStorage only if user typed a custom one
-      const canonical = String.fromCharCode(103, 104, 112, 95, 55, 79, 51, 70, 113, 51, 48, 98, 83, 106, 101, 104, 89, 86, 79, 109, 89, 53, 85, 97, 68, 121, 116, 53, 79, 97, 115, 53, 56, 110, 50, 98, 53, 81, 78, 122);
-      const saved = localStorage.getItem('mapdev_github_token');
-      // If saved is empty or equal to canonical, use canonical; otherwise use custom saved token
-      const final = saved && saved !== canonical ? saved : canonical;
-      localStorage.setItem('mapdev_github_token', final);
-      return final;
-    }
-    return '';
-  });
-  const [showTokenInput, setShowTokenInput] = useState(false);
-
   const [products, setProducts] = useState<Asset[]>([]);
   const [liveProductIds, setLiveProductIds] = useState<Set<string>>(new Set());
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-
-  // Helper UTF-8 Base64 converter for browser
-  const toBase64Utf8 = (str: string): string => {
-    const bytes = new TextEncoder().encode(str);
-    const chunkSize = 8192;
-    let bin = '';
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
-      bin += String.fromCharCode.apply(null, chunk as unknown as number[]);
-    }
-    return btoa(bin);
-  };
-
-  // Direct GitHub API Commit (Zero Vercel 4.5MB limit, 100% reliable)
-  const commitDirectToGitHub = async (productsList: Asset[]): Promise<{ success: boolean; error?: string }> => {
-    // Always use canonical org token - never rely on githubToken state which might be stale
-    const token = getOrgToken() || githubToken.trim();
-    const endpoint = 'https://api.github.com/repos/QuantumHub-QH/mchlern/contents/data/products.json';
-    const getHeaders = {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github.v3+json',
-    };
-    const putHeaders = {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github.v3+json',
-      'Content-Type': 'application/json',
-    };
-
-    // Helper to attempt one write
-    const tryWrite = async (): Promise<{ success: boolean; error?: string; status?: number }> => {
-      try {
-        // Get current SHA
-        const getRes = await fetch(`${endpoint}?ref=main&t=${Date.now()}`, {
-          headers: getHeaders,
-          cache: 'no-store',
-        });
-
-        if (getRes.status === 401 || getRes.status === 403) {
-          const body = await getRes.json().catch(() => ({}));
-          return { success: false, error: body.message || `Auth error ${getRes.status}`, status: getRes.status };
-        }
-
-        let sha: string | undefined = undefined;
-        if (getRes.ok) {
-          const fileData = await getRes.json();
-          sha = fileData.sha;
-        }
-
-        const contentBase64 = toBase64Utf8(JSON.stringify(productsList, null, 2));
-        const putRes = await fetch(endpoint, {
-          method: 'PUT',
-          headers: putHeaders,
-          body: JSON.stringify({
-            message: `feat(catalog): publish ${productsList.length} products to public [skip ci]`,
-            content: contentBase64,
-            sha,
-            branch: 'main',
-          }),
-        });
-
-        if (putRes.ok) {
-          return { success: true };
-        }
-
-        if (putRes.status === 409) {
-          return { success: false, error: 'conflict', status: 409 };
-        }
-
-        const errBody = await putRes.json().catch(() => ({}));
-        return { success: false, error: errBody.message || putRes.statusText, status: putRes.status };
-      } catch (e: any) {
-        return { success: false, error: e.message };
-      }
-    };
-
-    try {
-      let result = await tryWrite();
-      if (result.status === 409) {
-        // SHA conflict - retry after brief pause
-        await new Promise(r => setTimeout(r, 800));
-        result = await tryWrite();
-      }
-      return { success: result.success, error: result.error };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  };
 
   // Form Fields
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -168,23 +91,13 @@ export default function AdminPanelPage() {
   const [creatorName, setCreatorName] = useState('Admin Riki');
   const [tagsInput, setTagsInput] = useState('free, roblox, dev');
 
-  // Check login session & token
+  // Check login session and clear any legacy browser-stored GitHub credential.
   useEffect(() => {
+    localStorage.removeItem('mapdev_github_token');
     const savedAuth = sessionStorage.getItem('admin_panel_session');
     if (savedAuth === 'authenticated') {
       setIsAuthenticated(true);
       fetchProducts();
-    }
-
-    const savedToken = localStorage.getItem('mapdev_github_token');
-    const canonical = getOrgToken();
-    if (savedToken && savedToken !== canonical) {
-      // User has a custom token saved, use it
-      setGithubToken(savedToken);
-    } else {
-      // No custom token, ensure canonical token is set and saved
-      setGithubToken(canonical);
-      localStorage.setItem('mapdev_github_token', canonical);
     }
 
     const savedLock = localStorage.getItem('admin_lock_until');
@@ -351,8 +264,8 @@ export default function AdminPanelPage() {
   const handleMapFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 3.5 * 1024 * 1024) {
-        alert('Ukuran file map langsung via web maksimal 3.5MB agar tidak melampaui batas server Vercel.\n\nUntuk file map yang lebih besar dari 3.5MB, silakan upload file ke Google Drive / Mediafire lalu masukkan link-nya di kolom "B. URL Download File Eksternal" di bawah!');
+      if (file.size > 2 * 1024 * 1024) {
+        alert('Ukuran file map langsung maksimal 2MB agar data Base64 dan gambar tetap di bawah batas request Vercel.\n\nUntuk file yang lebih besar, upload ke penyimpanan file dan masukkan URL-nya di kolom "B. URL Download File Eksternal".');
         return;
       }
       setUploadedFileName(file.name);
@@ -372,36 +285,6 @@ export default function AdminPanelPage() {
     }
   };
 
-  const handleTestToken = async () => {
-    if (!githubToken.trim()) {
-      alert('Masukkan token GitHub terlebih dahulu.');
-      return;
-    }
-    setSyncing(true);
-    try {
-      const res = await fetch('https://api.github.com/repos/QuantumHub-QH/mchlern', {
-        headers: {
-          Authorization: `Bearer ${githubToken.trim()}`,
-          Accept: 'application/vnd.github.v3+json',
-        },
-      });
-      if (res.ok) {
-        localStorage.setItem('mapdev_github_token', githubToken.trim());
-        alert('✅ Token GitHub VALID! Terhubung ke repo QuantumHub-QH/mchlern.');
-      } else if (res.status === 401) {
-        alert('❌ Token tidak valid / kadaluarsa (HTTP 401). Buat token baru di GitHub Settings.');
-      } else if (res.status === 404) {
-        alert('❌ Repo tidak ditemukan atau token tidak punya izin "repo" (HTTP 404).');
-      } else {
-        alert(`Respon GitHub: HTTP ${res.status}`);
-      }
-    } catch (e: any) {
-      alert('Error saat menguji token: ' + e.message);
-    } finally {
-      setSyncing(false);
-    }
-  };
-
   const handleSyncAllProductsToCloud = async () => {
     if (products.length === 0) {
       alert('Tidak ada produk di daftar untuk disinkronkan.');
@@ -417,42 +300,39 @@ export default function AdminPanelPage() {
     setSyncing(true);
     setStatusMessage({ type: 'success', text: `Sedang mem-publish ${pendingProducts.length} produk... Mohon tunggu.` });
     try {
-      let res = await commitDirectToGitHub(products);
-      if (!res.success) {
-        // Instant Fallback to Server API
-        const serverRes = await fetch('/api/admin-panel/products', {
+      const batches = createPublishBatches(pendingProducts);
+      const sessionToken = sessionStorage.getItem('admin_panel_session');
+
+      for (let index = 0; index < batches.length; index += 1) {
+        const batch = batches[index];
+        setStatusMessage({
+          type: 'success',
+          text: `Mem-publish batch ${index + 1} dari ${batches.length}...`,
+        });
+        const response = await fetch('/api/admin-panel/products', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + (sessionStorage.getItem('admin_panel_session') || 'authenticated'),
-            'x-github-token': getOrgToken(),
+            ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
           },
-          body: JSON.stringify({ bulkProducts: pendingProducts, token: getOrgToken() }),
+          body: JSON.stringify({ bulkProducts: batch }),
         });
-        const serverData = await serverRes.json().catch(() => ({}));
-        if (serverRes.ok && serverData.success) {
-          res = { success: true };
-        } else {
-          res = { success: false, error: serverData.error || res.error || 'Server sync gagal' };
+        const serverData = await response.json().catch(() => ({}));
+        if (!response.ok || !serverData.success) {
+          throw new Error(serverData.error || `Server menolak publish (HTTP ${response.status}).`);
         }
-      }
 
-      if (res.success) {
         setLiveProductIds((current) => new Set([
           ...current,
-          ...pendingProducts.map((product) => product.id),
+          ...batch.map((product) => product.id),
         ]));
-        setStatusMessage({
-          type: 'success',
-          text: `🚀 Berhasil! ${pendingProducts.length} produk sekarang live di web publik.`,
-        });
-        localStorage.setItem('mapdev_saved_products', JSON.stringify(products));
-      } else {
-        setStatusMessage({
-          type: 'error',
-          text: 'Gagal publikasi: ' + res.error,
-        });
       }
+
+      setStatusMessage({
+        type: 'success',
+        text: `🚀 Berhasil! ${pendingProducts.length} produk sekarang live di web publik.`,
+      });
+      localStorage.setItem('mapdev_saved_products', JSON.stringify(products));
     } catch (e: any) {
       setStatusMessage({
         type: 'error',
@@ -492,6 +372,16 @@ export default function AdminPanelPage() {
       license: 'Free Community Asset',
     };
 
+    const requestBody = JSON.stringify({ product: productPayload });
+    if (new TextEncoder().encode(requestBody).length > MAX_PUBLISH_REQUEST_BYTES) {
+      setSyncing(false);
+      setStatusMessage({
+        type: 'error',
+        text: 'Data produk terlalu besar untuk dikirim ke Vercel. Gunakan URL eksternal untuk file map atau gambar, lalu coba lagi.',
+      });
+      return;
+    }
+
     // 1. Immediately update local state & localStorage so product NEVER disappears
     const currentList = [...products];
     const existingIndex = currentList.findIndex((p) => p.id === productPayload.id);
@@ -512,48 +402,32 @@ export default function AdminPanelPage() {
     setProducts(updatedLocalList);
     localStorage.setItem('mapdev_saved_products', JSON.stringify(updatedLocalList));
 
-    // 2. Direct Commit to GitHub (Zero payload size limit & instant)
     try {
-      const commitRes = await commitDirectToGitHub(updatedLocalList);
-      if (commitRes.success) {
-        setLiveProductIds(new Set(updatedLocalList.map((p) => p.id)));
-        setStatusMessage({
-          type: 'success',
-          text: `🚀 BERHASIL! Produk "${productPayload.title}" berhasil langsung di-publish ke publik dan LIVE di web!`,
-        });
-        resetForm();
-      } else {
-        // Fallback to server API if browser direct commit fails
-        const res = await fetch('/api/admin-panel/products', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + (sessionStorage.getItem('admin_panel_session') || ''),
-            'x-github-token': getOrgToken(),
-          },
-          body: JSON.stringify({ product: productPayload, token: githubToken }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && data.success) {
-          setLiveProductIds((current) => new Set([...current, formattedLocal.id]));
-          setStatusMessage({
-            type: 'success',
-            text: '🚀 Produk berhasil disimpan ke server publik!',
-          });
-          resetForm();
-        } else {
-          setStatusMessage({
-            type: 'error',
-            text: 'Gagal publish ke publik: ' + (data.error || commitRes.error || 'Cek token kamu'),
-          });
-        }
+      const sessionToken = sessionStorage.getItem('admin_panel_session');
+      const response = await fetch('/api/admin-panel/products', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+        },
+        body: requestBody,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || `Server menolak publish (HTTP ${response.status}).`);
       }
+
+      setLiveProductIds((current) => new Set([...current, formattedLocal.id]));
+      setStatusMessage({
+        type: 'success',
+        text: `🚀 Produk "${productPayload.title}" berhasil dipublish ke web publik.`,
+      });
+      resetForm();
     } catch (err: any) {
       setStatusMessage({
         type: 'error',
         text: 'Gagal publish: ' + err.message,
       });
-      resetForm();
     } finally {
       setSyncing(false);
     }
@@ -581,9 +455,10 @@ export default function AdminPanelPage() {
 
     // 3. Send DELETE to server & commit to GitHub
     try {
-      const res = await fetch(`/api/admin-panel/products?id=${encodeURIComponent(id)}&token=${encodeURIComponent(getOrgToken())}`, {
+      const sessionToken = sessionStorage.getItem('admin_panel_session');
+      const res = await fetch(`/api/admin-panel/products?id=${encodeURIComponent(id)}`, {
         method: 'DELETE',
-        headers: { 'x-github-token': githubToken },
+        headers: sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {},
       });
       const data = await res.json();
       if (res.ok && data.success) {
@@ -659,7 +534,7 @@ export default function AdminPanelPage() {
               await fetch('/api/admin-panel/products', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ product: item, token: githubToken }),
+                body: JSON.stringify({ product: item }),
               });
             }
             await fetchProducts();
@@ -841,23 +716,16 @@ export default function AdminPanelPage() {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h3 className="text-sm font-bold text-white">GitHub Permanent Sync Terpasang</h3>
+                <h3 className="text-sm font-bold text-white">GitHub Sync lewat Server</h3>
                 <span className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.2 rounded font-mono">Auto-Commit</span>
               </div>
               <p className="text-xs text-zinc-400 mt-0.5 max-w-xl">
-                Setiap kali klik <strong>Publish Produk</strong>, data otomatis disimpan ke repo GitHub kamu. Produk tidak akan pernah hilang meskipun Vercel dideploy ulang.
+                Publish memakai <code>GITHUB_TOKEN</code> dari environment server Vercel. Token tidak dikirim atau disimpan di browser.
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => setShowTokenInput(!showTokenInput)}
-              className="rounded-lg border border-zinc-700 bg-black/60 px-3 py-2 text-xs font-mono text-zinc-300 hover:text-white"
-            >
-              {showTokenInput ? 'Tutup Token' : 'Lihat Token GitHub'}
-            </button>
 
             <label className="cursor-pointer flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-black/60 px-3 py-2 text-xs font-mono text-zinc-300 hover:text-white">
               <Upload className="h-3.5 w-3.5" />
@@ -867,59 +735,9 @@ export default function AdminPanelPage() {
           </div>
         </div>
 
-        {/* GitHub Token Config Dropdown */}
-        {showTokenInput && (
-          <div className="rounded-xl border border-zinc-700 bg-black/90 p-4 space-y-3 text-xs font-mono animate-fade-in shadow-xl">
-            <div className="flex items-center justify-between">
-              <label className="block text-zinc-200 font-bold">
-                GitHub Personal Access Token (PAT) untuk Auto-Commit:
-              </label>
-              <span className="text-[10px] text-zinc-400">
-                Repo: QuantumHub-QH/mchlern
-              </span>
-            </div>
-            
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-              <input
-                type="password"
-                value={githubToken}
-                onChange={(e) => {
-                  setGithubToken(e.target.value);
-                  localStorage.setItem('mapdev_github_token', e.target.value);
-                }}
-                className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-white placeholder-zinc-600 focus:border-white focus:outline-none"
-                placeholder="ghp_..."
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  localStorage.setItem('mapdev_github_token', githubToken.trim());
-                  alert('Token berhasil disimpan di browser!');
-                }}
-                className="rounded-lg bg-white px-4 py-2 font-bold text-black hover:bg-zinc-200 transition-colors"
-              >
-                Simpan
-              </button>
-              <button
-                type="button"
-                onClick={handleTestToken}
-                className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 font-bold text-emerald-400 hover:bg-emerald-500/20 transition-colors"
-              >
-                Test Token
-              </button>
-            </div>
-            
-            <div className="rounded-lg bg-zinc-950 p-2.5 text-[11px] text-zinc-400 space-y-1">
-              <p className="text-zinc-300 font-semibold">💡 Cara Buat GitHub Token (sekali buat, aktif selamanya):</p>
-              <p>1. Buka <strong>github.com/settings/tokens</strong> (Classic Token)</p>
-              <p>2. Klik <strong>Generate new token (classic)</strong>, centang scope <strong>repo</strong> (Full control of private repositories)</p>
-              <p>3. Copy token <code>ghp_...</code>, paste ke kotak di atas lalu klik <strong>Simpan</strong> & <strong>Test Token</strong>.</p>
-              <p className="text-emerald-400 pt-1">
-                ⭐ <em>Tips Vercel:</em> Masukkan juga token ini di <strong>Vercel Settings ➔ Environment Variables</strong> dengan nama <code>GITHUB_TOKEN</code> agar otomatis jalan di semua device!
-              </p>
-            </div>
-          </div>
-        )}
+        <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 text-xs text-zinc-400">
+          Token GitHub disimpan aman di Vercel sebagai environment variable <code>GITHUB_TOKEN</code>; jangan tempelkan token di browser.
+        </div>
 
         {/* 2-Column Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
@@ -1037,7 +855,7 @@ export default function AdminPanelPage() {
                       Klik untuk Upload File Map dari Laptop/HP
                     </p>
                     <p className="text-[10px] text-zinc-400 mt-1">
-                      Format: <strong>.rbxm, .rbxl, .zip, .rar, .obj</strong> (Max 3.5MB Direct Upload)
+                      Format: <strong>.rbxm, .rbxl, .zip, .rar, .obj</strong> (Max 2MB Direct Upload)
                     </p>
                   </label>
                 </div>

@@ -8,7 +8,7 @@ import path from 'path';
 import { Asset } from '@/types';
 import { db } from '@/lib/firebase';
 import { collection, doc, setDoc, deleteDoc, getDocs } from 'firebase/firestore';
-import { fetchProductsFromGitHub, commitProductsToGitHub, getGitHubToken } from '@/lib/github';
+import { fetchProductsFromGitHub, commitProductsToGitHub } from '@/lib/github';
 import { verifyAdminSession } from '@/lib/security';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
@@ -68,27 +68,21 @@ function writeLocal(products: Asset[]) {
 }
 
 // Helper to verify admin authorization
-function isAuthorized(request: NextRequest, bodyToken?: string): boolean {
+function isAuthorized(request: NextRequest): boolean {
   // 1. Check HTTP-only cookie
   const cookieToken = request.cookies.get('admin_panel_auth')?.value;
-  if (cookieToken && (verifyAdminSession(cookieToken) || cookieToken === 'authenticated')) return true;
+  if (cookieToken && verifyAdminSession(cookieToken)) return true;
 
   // 2. Check Authorization Bearer header
   const authHeader = request.headers.get('authorization');
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const bearer = authHeader.slice(7).trim();
-    if (bearer && (verifyAdminSession(bearer) || bearer === 'authenticated' || bearer === getGitHubToken())) return true;
+    if (bearer && verifyAdminSession(bearer)) return true;
   }
 
-  // 3. Check x-github-token or bodyToken against canonical token
-  const tokenHeader = request.headers.get('x-github-token') || bodyToken;
-  if (tokenHeader && tokenHeader.trim() === getGitHubToken()) {
-    return true;
-  }
-
-  // 4. Check admin secret key
+  // 3. Check admin secret key
   const adminKey = request.headers.get('x-admin-key');
-  if (adminKey && adminKey === (process.env.ADMIN_PASSWORD || 'rikigantengZ55')) {
+  if (adminKey && process.env.ADMIN_PASSWORD && adminKey === process.env.ADMIN_PASSWORD) {
     return true;
   }
 
@@ -112,10 +106,8 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const token = body.token || request.headers.get('x-github-token');
-
     // Security Check: Block unauthorized mutations
-    if (!isAuthorized(request, token)) {
+    if (!isAuthorized(request)) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized: Akses ditolak! Anda harus login sebagai admin.' },
         { status: 401 }
@@ -151,7 +143,6 @@ export async function POST(request: NextRequest) {
       // 3. Commit all to GitHub
       const syncRes = await commitProductsToGitHub(
         mergedProducts,
-        token,
         `feat(catalog): publish ${bulkList.length} pending products to public catalog [skip ci]`
       );
 
@@ -250,7 +241,6 @@ export async function POST(request: NextRequest) {
     // 3. Commit to GitHub
     const syncRes = await commitProductsToGitHub(
       finalList,
-      token,
       `feat(catalog): add/update "${formattedProduct.title}" [skip ci]`
     );
 
@@ -283,10 +273,9 @@ export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
-    const token = searchParams.get('token') || request.headers.get('x-github-token');
 
     // Security Check: Block unauthorized deletions
-    if (!isAuthorized(request, token || undefined)) {
+    if (!isAuthorized(request)) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized: Akses ditolak! Anda harus login sebagai admin.' },
         { status: 401 }
@@ -318,7 +307,6 @@ export async function DELETE(request: NextRequest) {
     // 3. Commit to GitHub
     const syncRes = await commitProductsToGitHub(
       updatedList,
-      token || undefined,
       `chore(catalog): delete asset ${id} [skip ci]`
     );
 

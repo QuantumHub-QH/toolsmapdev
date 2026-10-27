@@ -241,10 +241,7 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
 
     // 2. Fetch live from backend & GitHub
     try {
-      const ghToken = localStorage.getItem('mapdev_github_token') || '';
-      const res = await fetch(`/api/roblox/limit?discordId=${encodeURIComponent(discordUser.id)}`, {
-        headers: ghToken ? { 'x-github-token': ghToken } : {},
-      });
+      const res = await fetch(`/api/roblox/limit?discordId=${encodeURIComponent(discordUser.id)}`);
       const data = await res.json();
       if (data.success) {
         // Take whichever used is higher so quota NEVER resets backward on refresh
@@ -675,14 +672,12 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
               remaining: Math.max(0, 10 - newUsed),
             });
 
-            const ghToken = localStorage.getItem('mapdev_github_token') || '';
             const limitRes = await fetch('/api/roblox/limit', {
               method: 'POST',
               headers: { 
                 'Content-Type': 'application/json',
-                ...(ghToken ? { 'x-github-token': ghToken } : {})
               },
-              body: JSON.stringify({ discordId: discordUser.id, count: 1, token: ghToken }),
+              body: JSON.stringify({ discordId: discordUser.id, count: 1 }),
             });
             const limitData = await limitRes.json();
             if (limitData.success) {

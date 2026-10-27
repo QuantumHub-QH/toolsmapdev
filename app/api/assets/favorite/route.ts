@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { Asset } from '@/types';
+import { commitProductsToGitHub } from '@/lib/github';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
 const GITHUB_REPO = 'QuantumHub-QH/mchlern';
@@ -36,7 +37,6 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const assetId = body.id;
     const action = body.action || 'like'; // 'like' or 'unlike'
-    const clientToken = body.token || request.headers.get('x-github-token') || process.env.GITHUB_TOKEN;
 
     if (!assetId) {
       return NextResponse.json({ success: false, error: 'Asset ID diperlukan' }, { status: 400 });
@@ -61,6 +61,10 @@ export async function POST(request: NextRequest) {
       return item;
     });
 
+    if (!updatedAsset) {
+      return NextResponse.json({ success: false, error: 'Produk tidak ditemukan' }, { status: 404 });
+    }
+
     // Write locally
     try {
       const dir = path.dirname(DATA_FILE_PATH);
@@ -68,44 +72,11 @@ export async function POST(request: NextRequest) {
       fs.writeFileSync(DATA_FILE_PATH, JSON.stringify(updatedProducts, null, 2), 'utf-8');
     } catch (e) {}
 
-    // Background sync to GitHub for permanent persistence across redeploys
-    if (clientToken) {
-      try {
-        const getRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`, {
-          headers: {
-            Authorization: `Bearer ${clientToken}`,
-            Accept: 'application/vnd.github.v3+json',
-            'User-Agent': 'MapDev-Favorites',
-          },
-          cache: 'no-store',
-        });
-
-        let sha: string | undefined = undefined;
-        if (getRes.ok) {
-          const fileData = await getRes.json();
-          sha = fileData.sha;
-        }
-
-        const contentBase64 = Buffer.from(JSON.stringify(updatedProducts, null, 2)).toString('base64');
-        await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`, {
-          method: 'PUT',
-          headers: {
-            Authorization: `Bearer ${clientToken}`,
-            Accept: 'application/vnd.github.v3+json',
-            'Content-Type': 'application/json',
-            'User-Agent': 'MapDev-Favorites',
-          },
-          body: JSON.stringify({
-            message: `chore: update favorites count for asset ${assetId} [skip ci]`,
-            content: contentBase64,
-            sha,
-            branch: 'main',
-          }),
-        });
-      } catch (err) {
-        console.error('Failed to commit favorites to GitHub:', err);
-      }
-    }
+    const syncResult = await commitProductsToGitHub(
+      updatedProducts,
+      `chore: update favorites count for asset ${assetId} [skip ci]`
+    );
+    if (!syncResult.success) console.error('Failed to commit favorites to GitHub:', syncResult.message);
 
     return NextResponse.json({
       success: true,
