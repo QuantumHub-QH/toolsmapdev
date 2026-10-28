@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import { getGitHubToken } from '@/lib/github';
 
 const LIMITS_FILE_PATH = path.join(process.cwd(), 'data', 'limits.json');
 const GITHUB_REPO = 'QuantumHub-QH/mchlern';
 const GITHUB_FILE_PATH = 'data/limits.json';
-const GITHUB_RAW_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/main/${GITHUB_FILE_PATH}`;
-
 const DAILY_LIMIT = 10;
 
 function getTodayString(): string {
@@ -16,16 +15,25 @@ function getTodayString(): string {
 }
 
 async function getLimitsMap(): Promise<Record<string, { date: string; used: number }>> {
-  try {
-    const res = await fetch(`${GITHUB_RAW_URL}?t=${Date.now()}`, {
-      next: { revalidate: 0 },
-      headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' },
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (typeof data === 'object' && data !== null) return data;
+  const token = getGitHubToken();
+  if (token) {
+    try {
+      const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}?ref=main&t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github.v3.raw',
+          'User-Agent': 'MapDev-Limits',
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (typeof data === 'object' && data !== null) return data;
+      }
+    } catch (error) {
+      console.warn('GitHub limits fetch warning:', error);
     }
-  } catch (e) {}
+  }
 
   try {
     if (fs.existsSync(LIMITS_FILE_PATH)) {

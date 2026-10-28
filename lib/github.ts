@@ -3,7 +3,6 @@ import { Asset } from '@/types';
 export const GITHUB_REPO = 'QuantumHub-QH/mchlern';
 export const GITHUB_FILE_PATH = 'data/products.json';
 export const GITHUB_STATS_PATH = 'data/stats.json';
-export const GITHUB_RAW_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/main/${GITHUB_FILE_PATH}`;
 
 export interface GlobalStats {
   totalVisitors: number;
@@ -74,22 +73,7 @@ export async function fetchProductsFromGitHub(): Promise<Asset[]> {
     }
   }
 
-  // 2. Second attempt: GitHub Raw CDN fallback
-  try {
-    const rawRes = await fetchWithTimeout(`${GITHUB_RAW_URL}?t=${Date.now()}`, {
-      cache: 'no-store',
-      headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' },
-    });
-    if (rawRes.ok) {
-      const parsed = await rawRes.json();
-      if (Array.isArray(parsed)) {
-        return parsed;
-      }
-    }
-  } catch (e) {
-    console.warn('GitHub Raw CDN fetch warning:', e);
-  }
-
+  // Never fall back to the unauthenticated raw URL; it bypasses private-repository access.
   return [];
 }
 

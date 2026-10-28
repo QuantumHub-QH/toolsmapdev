@@ -2,24 +2,19 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { Asset } from '@/types';
-import { commitProductsToGitHub } from '@/lib/github';
+import { commitProductsToGitHub, fetchProductsFromGitHub } from '@/lib/github';
+import { getDiscordSession } from '@/lib/discord-session';
+import { sanitizePublicAsset } from '@/lib/assets';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
-const GITHUB_REPO = 'QuantumHub-QH/mchlern';
-const GITHUB_FILE_PATH = 'data/products.json';
-const GITHUB_RAW_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/main/${GITHUB_FILE_PATH}`;
 
 async function getLiveProducts(): Promise<Asset[]> {
   try {
-    const res = await fetch(`${GITHUB_RAW_URL}?t=${Date.now()}`, {
-      next: { revalidate: 0 },
-      headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' },
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) return data;
-    }
-  } catch (e) {}
+    const products = await fetchProductsFromGitHub();
+    if (products.length > 0) return products;
+  } catch (error) {
+    console.warn('GitHub favorite catalog fallback:', error);
+  }
 
   try {
     if (fs.existsSync(DATA_FILE_PATH)) {
@@ -33,6 +28,13 @@ async function getLiveProducts(): Promise<Asset[]> {
 }
 
 export async function POST(request: NextRequest) {
+  if (!getDiscordSession(request)) {
+    return NextResponse.json(
+      { success: false, error: 'Login Discord diperlukan.' },
+      { status: 401, headers: { 'Cache-Control': 'private, no-store' } }
+    );
+  }
+
   try {
     const body = await request.json();
     const assetId = body.id;
@@ -49,16 +51,17 @@ export async function POST(request: NextRequest) {
       if (item.id === assetId) {
         const currentFavs = item.stats?.favorites || 0;
         const newFavs = action === 'like' ? currentFavs + 1 : Math.max(0, currentFavs - 1);
-        updatedAsset = {
+        const publicAsset = sanitizePublicAsset({
           ...item,
           stats: {
             ...item.stats,
             favorites: newFavs,
           },
-        };
-        return updatedAsset;
+        });
+        updatedAsset = publicAsset;
+        return publicAsset;
       }
-      return item;
+      return sanitizePublicAsset(item);
     });
 
     if (!updatedAsset) {

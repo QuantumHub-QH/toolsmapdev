@@ -11,6 +11,7 @@ import { collection, getDocs } from 'firebase/firestore';
 import { fetchProductsFromGitHub } from '@/lib/github';
 import { getLiveStats } from '@/lib/stats';
 import { sanitizePublicAsset } from '@/lib/assets';
+import { getDiscordSession } from '@/lib/discord-session';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
 
@@ -57,6 +58,20 @@ async function getLiveAssets(): Promise<Asset[]> {
 }
 
 export async function GET(request: NextRequest) {
+  if (!getDiscordSession(request)) {
+    return NextResponse.json(
+      { success: false, error: 'Login Discord diperlukan untuk melihat katalog.' },
+      {
+        status: 401,
+        headers: {
+          'Cache-Control': 'private, no-store',
+          'CDN-Cache-Control': 'no-store',
+          'Vercel-CDN-Cache-Control': 'no-store',
+        },
+      }
+    );
+  }
+
   const { searchParams } = new URL(request.url);
   const category = searchParams.get('category');
   const search = searchParams.get('search')?.toLowerCase();

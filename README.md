@@ -62,26 +62,21 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ---
 
-## 🔒 Premium Assets Setup
+## 🔒 Discord-Gated Product Catalog
 
-Premium access is granted to a Discord user ID for a selected number of days in the admin panel. Expired entitlements are denied by the server automatically. Public catalog responses include product details only; premium files, Roblox IDs, download URLs, and Luau code are kept in private Firebase collections/storage and released only after the server verifies the signed Discord session and current entitlement.
+The public website requires a verified Discord login before showing the product catalog. Product API requests, favorites, and download-stat updates also require the server-signed HTTP-only Discord session cookie; product data is not embedded in the homepage bundle or browser storage.
 
-Before using Premium in production:
+To prevent direct access to the catalog outside the website:
 
-1. Enable **Cloud Firestore** and **Cloud Storage** in the Firebase project used by the site.
-2. Create a Firebase service account with access to that project. In Vercel Project Settings → Environment Variables, set:
-   - `FIREBASE_SERVICE_ACCOUNT_JSON`: the full service-account JSON value. Keep it server-only; never add a `NEXT_PUBLIC_` prefix or commit the key.
-   - `FIREBASE_STORAGE_BUCKET`: the exact bucket name shown in Firebase Storage (for example, `project-id.firebasestorage.app`).
-   - `ADMIN_PASSWORD`: a strong password for the admin panel. The built-in weak default is intentionally disabled.
-   - `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, and `DISCORD_REDIRECT_URI`: configure the Discord OAuth application and register the exact callback URL (`https://your-domain/api/auth/discord/callback`) in Discord Developer Portal. The client secret also signs the HTTP-only Discord session cookie.
-   - Optionally set `NEXT_PUBLIC_BASE_URL` to the canonical site origin.
-3. Publish [`storage.rules`](./storage.rules) to Firebase Storage and [`firestore.rules`](./firestore.rules) to Cloud Firestore. These deny direct browser access; Firebase Admin SDK server operations bypass client security rules. The public catalog remains served by the GitHub-backed API.
-4. Redeploy Vercel after setting the environment variables, then log out and authorize Discord again.
-5. In Admin Panel, add a Discord ID with a duration. Mark a product **Premium** and publish it. Use a private file upload for premium files; an external download URL is only revealed to entitled users and may itself be publicly shareable.
+1. Change the GitHub repository `QuantumHub-QH/mchlern` to **Private** in GitHub Settings → General → Danger Zone. The Vercel Git integration must retain access to this private repo.
+2. Keep `GITHUB_TOKEN` configured in Vercel, with private-repository **Contents: Read and write** permission. The server uses the authenticated GitHub API to load and publish `data/products.json`; unauthenticated raw GitHub fallback is disabled.
+3. Keep `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, and `DISCORD_REDIRECT_URI` configured; register the exact callback URL (`https://your-domain/api/auth/discord/callback`) in Discord Developer Portal. The client secret signs the Discord session cookie.
+4. Publish [`firestore.rules`](./firestore.rules) to Cloud Firestore so browser clients cannot read the fallback `products` collection directly.
+5. Keep a strong `ADMIN_PASSWORD` configured in Vercel. Set all variables for the target environment and redeploy after changing them.
 
-Premium download and ID endpoints re-check the signed Discord session and expiration on every request. Discord IDs/Roblox IDs are not passwords, and a user who has legitimately received an asset can still copy or redistribute it.
+The repository is separate from the website's public availability: making the repo private should not make the deployed Vercel site private, provided Vercel retains repository access.
 
-**Previously public data cannot be made secret retroactively.** Promoting a product removes its protected fields from the current public catalog, but old GitHub commits and already-copied files/IDs may remain accessible. Replace or rotate any Roblox asset ID that was previously published before relying on Premium protection.
+**Previously public data cannot be made secret retroactively.** Making the repository private blocks future anonymous access to its current GitHub pages, but does not erase copies, forks, downloads, caches, screenshots, or old data already obtained by others. Rotate any exposed Roblox IDs/files where possible. Any user who can view/download a product after logging in can still copy or redistribute it; this gate prevents anonymous direct access, not redistribution by authorized visitors.
 
 ---
 

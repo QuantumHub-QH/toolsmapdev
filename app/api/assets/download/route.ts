@@ -10,10 +10,18 @@ import { db } from '@/lib/firebase';
 import { doc, updateDoc, increment } from 'firebase/firestore';
 import { commitStatsToGitHub } from '@/lib/github';
 import { getLiveStats, writeLocalStats } from '@/lib/stats';
+import { getDiscordSession } from '@/lib/discord-session';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
 
 export async function POST(request: NextRequest) {
+  if (!getDiscordSession(request)) {
+    return NextResponse.json(
+      { success: false, error: 'Login Discord diperlukan.' },
+      { status: 401, headers: { 'Cache-Control': 'private, no-store' } }
+    );
+  }
+
   try {
     const body = await request.json();
     const assetId = body.id;

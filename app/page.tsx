@@ -9,7 +9,6 @@ import { DevToolsSection } from '@/components/DevToolsSection';
 import { BookmarksModal } from '@/components/BookmarksModal';
 import { DiscordAuthModal, DiscordUser } from '@/components/DiscordAuthModal';
 import { Footer } from '@/components/Footer';
-import { ASSETS_DATA } from '@/lib/data';
 import { Asset, AssetCategory } from '@/types';
 import { SlidersHorizontal, Sparkles, Box, CheckCircle } from 'lucide-react';
 import { sanitizePublicAsset } from '@/lib/assets';
@@ -18,7 +17,7 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<AssetCategory>('all');
   const [sortBy, setSortBy] = useState<'popular' | 'newest' | 'downloads'>('popular');
-  const [assetsList, setAssetsList] = useState<Asset[]>(ASSETS_DATA);
+  const [assetsList, setAssetsList] = useState<Asset[]>([]);
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [bookmarkedIds, setBookmarkedIds] = useState<string[]>([]);
   const [isBookmarksOpen, setIsBookmarksOpen] = useState(false);
@@ -215,6 +214,11 @@ export default function Home() {
 
   // Load live assets from backend API + instant sync
   useEffect(() => {
+    if (!discordUser?.isAuthorized) {
+      setAssetsList([]);
+      return;
+    }
+
     const deletedIds: string[] = (() => {
       try {
         return JSON.parse(localStorage.getItem('mapdev_deleted_ids') || '[]');
@@ -254,13 +258,12 @@ export default function Home() {
           setAssetsList(cleanData);
           return;
         }
-        setAssetsList(ASSETS_DATA.map(sanitizePublicAsset));
       } catch (err) {
         console.error('Failed to fetch live assets:', err);
       }
     }
     fetchLiveAssets();
-  }, []);
+  }, [discordUser]);
 
   // Real-time download handler
   const handleDownload = (assetId: string) => {
