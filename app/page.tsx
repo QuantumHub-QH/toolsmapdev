@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Navbar } from '@/components/Navbar';
 import { Hero } from '@/components/Hero';
 import { AssetCard } from '@/components/AssetCard';
-import { AssetModal } from '@/components/AssetModal';
+import { AssetModal, PremiumAssetDetails } from '@/components/AssetModal';
 import { DevToolsSection } from '@/components/DevToolsSection';
 import { BookmarksModal } from '@/components/BookmarksModal';
 import { DiscordAuthModal, DiscordUser } from '@/components/DiscordAuthModal';
@@ -12,6 +12,7 @@ import { Footer } from '@/components/Footer';
 import { ASSETS_DATA } from '@/lib/data';
 import { Asset, AssetCategory } from '@/types';
 import { SlidersHorizontal, Sparkles, Box, CheckCircle } from 'lucide-react';
+import { sanitizePublicAsset } from '@/lib/assets';
 
 export default function Home() {
   const [searchQuery, setSearchQuery] = useState('');
@@ -32,50 +33,66 @@ export default function Home() {
   const [discordUser, setDiscordUser] = useState<DiscordUser | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [isDiscordModalOpen, setIsDiscordModalOpen] = useState(false);
+  const [isPremiumUser, setIsPremiumUser] = useState(false);
+  const [premiumDetails, setPremiumDetails] = useState<Record<string, PremiumAssetDetails>>({});
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Load Discord user session strictly (Zero access without Discord)
+  // Load the signed Discord session; browser-stored identity is not trusted.
   useEffect(() => {
-    try {
-      const urlParams = new URLSearchParams(window.location.search);
-      const discordUserParam = urlParams.get('discord_user');
-      const discordError = urlParams.get('discord_error');
-
-      if (discordUserParam) {
-        try {
-          const parsed = JSON.parse(decodeURIComponent(discordUserParam));
-          if (parsed && parsed.isAuthorized) {
-            setDiscordUser(parsed);
-            localStorage.setItem('mapdev_discord_user', JSON.stringify(parsed));
-            window.history.replaceState({}, '', '/');
-            setIsAuthChecking(false);
-            return;
-          }
-        } catch (e) {}
-      }
-
-      if (discordError) {
-        window.history.replaceState({}, '', '/');
-      }
-
-      const savedUser = localStorage.getItem('mapdev_discord_user');
-      if (savedUser) {
-        try {
-          const parsed = JSON.parse(savedUser);
-          if (parsed && parsed.isAuthorized) {
-            setDiscordUser(parsed);
-            setIsAuthChecking(false);
-            return;
-          }
-        } catch (e) {}
-      }
-    } catch (e) {
-      console.error('Error loading discord session:', e);
-    } finally {
-      setIsAuthChecking(false);
+    let isMounted = true;
+    localStorage.removeItem('mapdev_discord_user');
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('discord_error')) {
+      url.searchParams.delete('discord_error');
+      window.history.replaceState({}, '', url.pathname + url.search + url.hash);
     }
+
+    fetch('/api/auth/discord/session', { cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Gagal memverifikasi sesi Discord.');
+        return response.json();
+      })
+      .then((data: { user?: DiscordUser | null; isPremium?: boolean }) => {
+        if (!isMounted) return;
+        setDiscordUser(data.user || null);
+        setIsPremiumUser(Boolean(data.isPremium));
+      })
+      .catch((error) => console.error('Discord session check failed:', error))
+      .finally(() => {
+        if (isMounted) setIsAuthChecking(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
+
+  const refreshDiscordSession = async () => {
+    const response = await fetch('/api/auth/discord/session', { cache: 'no-store' });
+    const data: { user?: DiscordUser | null; isPremium?: boolean } = await response.json();
+    setDiscordUser(data.user || null);
+    setIsPremiumUser(Boolean(data.isPremium));
+  };
+
+  const openPremiumContact = () => {
+    window.open('https://discord.com/users/1309112913331748915', '_blank', 'noopener,noreferrer');
+  };
+
+  const requestPremiumAsset = async (assetId: string) => {
+    try {
+      const response = await fetch('/api/assets/premium-access', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productId: assetId }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Akses premium ditolak.');
+      setPremiumDetails((current) => ({ ...current, [assetId]: data }));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Gagal membuka aset premium.');
+    }
+  };
 
   // Record visit & fetch live global stats for all users
   useEffect(() => {
@@ -150,10 +167,6 @@ export default function Home() {
         return item;
       });
 
-      try {
-        localStorage.setItem('mapdev_saved_products', JSON.stringify(updated));
-      } catch (e) {}
-
       return updated;
     });
 
@@ -210,18 +223,7 @@ export default function Home() {
       }
     })();
 
-    // 1. Instant load from local storage if available
-    try {
-      const local = localStorage.getItem('mapdev_saved_products');
-      if (local) {
-        const parsed = JSON.parse(local);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setAssetsList(parsed.filter((a: Asset) => !deletedIds.includes(a.id)));
-        }
-      }
-    } catch (e) {}
-
-    // 2. Fetch live data from backend (with safe fallback to localStorage & direct GitHub CDN)
+    // Load public assets from the server; never trust a browser-cached product payload.
     async function fetchLiveAssets() {
       try {
         let serverProducts: Asset[] = [];
@@ -236,53 +238,23 @@ export default function Home() {
         } catch (e) {}
 
         if (serverProducts.length > 0) {
-          const cleanData = serverProducts.filter((a: Asset) => !deletedIds.includes(a.id));
-          if (cleanData.length > 0) {
-            // Read local saved products to retain any download count or un-synced product
-            let localCache: Asset[] = [];
-            try {
-              const localRaw = localStorage.getItem('mapdev_saved_products');
-              if (localRaw) localCache = JSON.parse(localRaw);
-            } catch (e) {}
-
-            // Merge server data with local download counts so downloads NEVER reset to 0
-            const merged = cleanData.map((item: Asset) => {
+          const cleanData = serverProducts
+            .filter((asset) => !deletedIds.includes(asset.id))
+            .map(sanitizePublicAsset)
+            .map((item) => {
               const trackedDl = parseInt(localStorage.getItem(`mapdev_dl_${item.id}`) || '0', 10);
-              const localItem = localCache.find((lc) => lc.id === item.id);
-              const localDl = localItem?.stats?.downloads || 0;
-              const serverDl = item.stats?.downloads || 0;
-              const maxDl = Math.max(trackedDl, localDl, serverDl);
-
               return {
                 ...item,
                 stats: {
                   ...item.stats,
-                  downloads: maxDl,
+                  downloads: Math.max(trackedDl, item.stats?.downloads || 0),
                 },
               };
             });
-
-            // Also keep any local products not yet in server
-            for (const lp of localCache) {
-              if (lp && lp.id && !deletedIds.includes(lp.id) && !merged.some((m: Asset) => m.id === lp.id)) {
-                merged.push(lp);
-              }
-            }
-
-            setAssetsList(merged);
-            localStorage.setItem('mapdev_saved_products', JSON.stringify(merged));
-            return;
-          }
+          setAssetsList(cleanData);
+          return;
         }
-        
-        // If /api/assets returned empty, keep local storage so products don't disappear on refresh
-        const local = localStorage.getItem('mapdev_saved_products');
-        if (local) {
-          const parsed = JSON.parse(local);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setAssetsList(parsed.filter((a: Asset) => !deletedIds.includes(a.id)));
-          }
-        }
+        setAssetsList(ASSETS_DATA.map(sanitizePublicAsset));
       } catch (err) {
         console.error('Failed to fetch live assets:', err);
       }
@@ -313,12 +285,6 @@ export default function Home() {
         }
         return item;
       });
-
-      try {
-        localStorage.setItem('mapdev_saved_products', JSON.stringify(next));
-      } catch (e) {
-        console.error(e);
-      }
 
       return next;
     });
@@ -421,7 +387,12 @@ export default function Home() {
         onOpenDiscordAuth={() => setIsDiscordModalOpen(true)}
         onLogoutDiscord={() => {
           localStorage.removeItem('mapdev_discord_user');
+          fetch('/api/auth/discord/logout', { method: 'POST' }).catch((error) => {
+            console.error('Discord logout failed:', error);
+          });
           setDiscordUser(null);
+          setIsPremiumUser(false);
+          setPremiumDetails({});
           showToast('Discord session disconnected');
         }}
       />
@@ -516,6 +487,8 @@ export default function Home() {
                   isBookmarked={bookmarkedIds.includes(asset.id)}
                   onToggleBookmark={toggleBookmark}
                   onDownload={handleDownload}
+                  isPremiumUser={isPremiumUser}
+                  onPremiumOnly={openPremiumContact}
                 />
               ))}
             </div>
@@ -537,6 +510,10 @@ export default function Home() {
         isBookmarked={selectedAsset ? bookmarkedIds.includes(selectedAsset.id) : false}
         onToggleBookmark={toggleBookmark}
         onDownload={handleDownload}
+        isPremiumUser={isPremiumUser}
+        premiumDetails={selectedAsset ? premiumDetails[selectedAsset.id] : null}
+        onRequestPremiumAccess={requestPremiumAsset}
+        onPremiumOnly={openPremiumContact}
       />
 
       <BookmarksModal
@@ -552,8 +529,9 @@ export default function Home() {
         isOpen={isDiscordModalOpen}
         onClose={() => setIsDiscordModalOpen(false)}
         onAuthorize={(user) => {
-          setDiscordUser(user);
-          showToast(`Welcome, @${user.username}! Discord connected.`);
+          void refreshDiscordSession().then(() => {
+            showToast(`Welcome, @${user.username}! Discord connected.`);
+          });
         }}
       />
 

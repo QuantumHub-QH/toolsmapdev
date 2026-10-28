@@ -1,4 +1,6 @@
+import { randomBytes } from 'crypto';
 import { NextResponse } from 'next/server';
+import { DISCORD_OAUTH_STATE_COOKIE } from '@/lib/discord-session';
 
 export async function GET() {
   const clientId = process.env.DISCORD_CLIENT_ID;
@@ -16,9 +18,18 @@ export async function GET() {
     redirect_uri: redirectUri,
     response_type: 'code',
     scope: 'identify',
+    state: randomBytes(32).toString('hex'),
   });
 
   const discordAuthUrl = `https://discord.com/oauth2/authorize?${params.toString()}`;
 
-  return NextResponse.redirect(discordAuthUrl);
+  const response = NextResponse.redirect(discordAuthUrl);
+  response.cookies.set(DISCORD_OAUTH_STATE_COOKIE, params.get('state')!, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: 10 * 60,
+    path: '/',
+  });
+  return response;
 }

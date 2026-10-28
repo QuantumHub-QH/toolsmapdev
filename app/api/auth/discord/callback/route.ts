@@ -1,15 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  createDiscordSessionToken,
+  DISCORD_OAUTH_STATE_COOKIE,
+  DISCORD_SESSION_COOKIE,
+} from '@/lib/discord-session';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get('code');
   const error = searchParams.get('error');
 
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://mchlern-git-main-mchlern1.vercel.app';
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || request.nextUrl.origin;
+  const state = searchParams.get('state');
+  const savedState = request.cookies.get(DISCORD_OAUTH_STATE_COOKIE)?.value;
 
-  if (error || !code) {
-    // User denied authorization or error
-    return NextResponse.redirect(`${baseUrl}/?discord_error=denied`);
+  if (error || !code || !state || !savedState || state !== savedState) {
+    const response = NextResponse.redirect(`${baseUrl}/?discord_error=denied`);
+    response.cookies.delete(DISCORD_OAUTH_STATE_COOKIE);
+    return response;
   }
 
   const clientId = process.env.DISCORD_CLIENT_ID;
@@ -59,18 +67,22 @@ export async function GET(request: NextRequest) {
       ? `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png?size=128`
       : `https://cdn.discordapp.com/embed/avatars/${parseInt(discordUser.discriminator || '0') % 5}.png`;
 
-    const user = {
+    const sessionToken = createDiscordSessionToken({
       id: discordUser.id,
       username: discordUser.username,
-      discriminator: discordUser.discriminator || '0',
       avatarUrl,
-      isAuthorized: true,
-      joinedAt: new Date().toISOString(),
-    };
+    });
 
-    // 4. Redirect back to homepage with user data encoded in URL params
-    const userData = encodeURIComponent(JSON.stringify(user));
-    return NextResponse.redirect(`${baseUrl}/?discord_user=${userData}`);
+    const response = NextResponse.redirect(baseUrl);
+    response.cookies.set(DISCORD_SESSION_COOKIE, sessionToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60,
+      path: '/',
+    });
+    response.cookies.delete(DISCORD_OAUTH_STATE_COOKIE);
+    return response;
 
   } catch (err) {
     console.error('Discord OAuth error:', err);

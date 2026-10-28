@@ -9,10 +9,16 @@ import {
   resetLoginAttempts,
 } from '@/lib/security';
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'rikigantengZ55';
-
 export async function POST(request: NextRequest) {
   try {
+    const adminPassword = process.env.ADMIN_PASSWORD;
+    if (!adminPassword) {
+      return NextResponse.json(
+        { success: false, error: 'ADMIN_PASSWORD belum dikonfigurasi di environment server.' },
+        { status: 503 }
+      );
+    }
+
     const ip =
       request.headers.get('x-forwarded-for')?.split(',')[0].trim() ||
       request.headers.get('x-real-ip') ||
@@ -35,14 +41,13 @@ export async function POST(request: NextRequest) {
     const { password } = await request.json();
 
     // 2. Validate Password
-    if (password === ADMIN_PASSWORD) {
+    if (password === adminPassword) {
       resetLoginAttempts(ip);
       const sessionToken = generateAdminSession();
 
       const response = NextResponse.json({
         success: true,
         message: 'Login berhasil!',
-        token: sessionToken,
       });
 
       // Secure HTTP-Only Cookie

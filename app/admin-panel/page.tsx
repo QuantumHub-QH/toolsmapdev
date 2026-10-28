@@ -28,6 +28,11 @@ import { Asset, AssetCategory, AssetFormat } from '@/types';
 const MAX_PUBLISH_REQUEST_BYTES = 3 * 1024 * 1024;
 const PUBLISH_REQUEST_TIMEOUT_MS = 35_000;
 
+interface PremiumUserRecord {
+  discordId: string;
+  expiresAt: number;
+}
+
 function createPublishBatches(products: Asset[]): Asset[][] {
   const batches: Asset[][] = [];
   let batch: Asset[] = [];
@@ -55,7 +60,10 @@ function createPublishBatches(products: Asset[]): Asset[][] {
 
 function saveProductsCache(products: Asset[]): boolean {
   try {
-    localStorage.setItem('mapdev_saved_products', JSON.stringify(products));
+    if (products.length > 0) {
+      localStorage.setItem('mapdev_saved_products', JSON.stringify(products));
+    }
+    else localStorage.removeItem('mapdev_saved_products');
     return true;
   } catch (error) {
     console.warn('Browser storage is full; products remain available from the server.', error);
@@ -110,6 +118,10 @@ export default function AdminPanelPage() {
   const [products, setProducts] = useState<Asset[]>([]);
   const [liveProductIds, setLiveProductIds] = useState<Set<string>>(new Set());
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [premiumUsers, setPremiumUsers] = useState<PremiumUserRecord[]>([]);
+  const [premiumDiscordId, setPremiumDiscordId] = useState('');
+  const [premiumDurationDays, setPremiumDurationDays] = useState(7);
+  const [isSavingPremiumUser, setIsSavingPremiumUser] = useState(false);
 
   // Form Fields
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -132,6 +144,14 @@ export default function AdminPanelPage() {
   const [fileSize, setFileSize] = useState('1.5 MB');
   const [creatorName, setCreatorName] = useState('Admin Riki');
   const [tagsInput, setTagsInput] = useState('free, roblox, dev');
+  const [isPremiumProduct, setIsPremiumProduct] = useState(false);
+
+  const loadPremiumUsers = async () => {
+    const response = await fetch('/api/admin-panel/premium', { cache: 'no-store' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Gagal memuat daftar Premium.');
+    setPremiumUsers(data.users || []);
+  };
 
   // Check login session and clear any legacy browser-stored GitHub credential.
   useEffect(() => {
@@ -140,6 +160,9 @@ export default function AdminPanelPage() {
     if (savedAuth === 'authenticated') {
       setIsAuthenticated(true);
       fetchProducts();
+      loadPremiumUsers().catch((error) => {
+        setStatusMessage({ type: 'error', text: error.message });
+      });
     }
 
     const savedLock = localStorage.getItem('admin_lock_until');
@@ -194,6 +217,9 @@ export default function AdminPanelPage() {
         sessionStorage.setItem('admin_panel_session', data.token || 'authenticated');
         setFailCount(0);
         fetchProducts();
+        loadPremiumUsers().catch((error) => {
+          setStatusMessage({ type: 'error', text: error.message });
+        });
       } else {
         const nextFails = failCount + 1;
         setFailCount(nextFails);
@@ -218,6 +244,46 @@ export default function AdminPanelPage() {
     sessionStorage.removeItem('admin_panel_session');
     setIsAuthenticated(false);
     setPasswordInput('');
+    setPremiumUsers([]);
+  };
+
+  const handleGrantPremium = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setIsSavingPremiumUser(true);
+    try {
+      const response = await fetch('/api/admin-panel/premium', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ discordId: premiumDiscordId, durationDays: premiumDurationDays }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Gagal menambahkan Premium.');
+      setPremiumDiscordId('');
+      await loadPremiumUsers();
+      setStatusMessage({
+        type: 'success',
+        text: `Discord ID ${data.user.discordId} Premium sampai ${new Date(data.user.expiresAt).toLocaleString('id-ID')}.`,
+      });
+    } catch (error) {
+      setStatusMessage({ type: 'error', text: error instanceof Error ? error.message : 'Gagal menambahkan Premium.' });
+    } finally {
+      setIsSavingPremiumUser(false);
+    }
+  };
+
+  const handleRevokePremium = async (discordId: string) => {
+    if (!confirm(`Cabut akses Premium untuk Discord ID ${discordId}?`)) return;
+    try {
+      const response = await fetch(`/api/admin-panel/premium?discordId=${encodeURIComponent(discordId)}`, {
+        method: 'DELETE',
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Gagal mencabut Premium.');
+      await loadPremiumUsers();
+      setStatusMessage({ type: 'success', text: `Premium untuk ${discordId} sudah dicabut.` });
+    } catch (error) {
+      setStatusMessage({ type: 'error', text: error instanceof Error ? error.message : 'Gagal mencabut Premium.' });
+    }
   };
 
   const fetchProducts = async () => {
@@ -264,7 +330,9 @@ export default function AdminPanelPage() {
       }
       const mergedList = Array.from(mergedMap.values());
       setProducts(mergedList);
-      saveProductsCache(mergedList);
+      const unsyncedProducts = mergedList.filter((product) => !liveIds.has(product.id));
+      if (unsyncedProducts.length > 0) saveProductsCache(unsyncedProducts);
+      else localStorage.removeItem('mapdev_saved_products');
     } catch (err) {
       console.error(err);
     } finally {
@@ -359,9 +427,14 @@ export default function AdminPanelPage() {
         ]));
       }
 
+      const syncedIds = new Set(pendingProducts.map((product) => product.id));
+      const remainingUnsynced = products.filter((product) => (
+        !syncedIds.has(product.id) && !liveProductIds.has(product.id)
+      ));
+      const isCacheSaved = saveProductsCache(remainingUnsynced);
       setStatusMessage({
         type: 'success',
-        text: saveProductsCache(products)
+        text: isCacheSaved
           ? `🚀 Berhasil! ${pendingProducts.length} produk sekarang live di web publik.`
           : `🚀 Berhasil! ${pendingProducts.length} produk sudah live. Cache browser penuh, tetapi katalog tersimpan di server.`,
       });
@@ -402,6 +475,7 @@ export default function AdminPanelPage() {
       creatorName: creatorName.trim() || 'Admin Riki',
       tags: tagsArray.length > 0 ? tagsArray : ['free', 'dev'],
       license: 'Free Community Asset',
+      isPremium: isPremiumProduct,
     };
 
     const requestBody = JSON.stringify({ product: productPayload });
@@ -445,6 +519,9 @@ export default function AdminPanelPage() {
           ? `🚀 Produk "${productPayload.title}" berhasil dipublish ke web publik.`
           : `🚀 Produk "${productPayload.title}" berhasil dipublish. Cache browser penuh, tetapi produk tersimpan di server.`,
       });
+      const remainingUnsynced = updatedLocalList.filter((product) => product.id !== formattedLocal.id && !liveProductIds.has(product.id));
+      if (remainingUnsynced.length > 0) saveProductsCache(remainingUnsynced);
+      else localStorage.removeItem('mapdev_saved_products');
       resetForm();
     } catch (err: any) {
       setStatusMessage({
@@ -514,6 +591,7 @@ export default function AdminPanelPage() {
     setFileSize(item.fileSize || '1.0 MB');
     setCreatorName(item.creator.name);
     setTagsInput(item.tags ? item.tags.join(', ') : '');
+    setIsPremiumProduct(Boolean(item.isPremium));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -534,6 +612,7 @@ export default function AdminPanelPage() {
     setFileSize('1.5 MB');
     setCreatorName('Admin Riki');
     setTagsInput('free, roblox, dev');
+    setIsPremiumProduct(false);
   };
 
   const downloadBackupJson = () => {
@@ -761,6 +840,66 @@ export default function AdminPanelPage() {
         <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 text-xs text-zinc-400">
           Token GitHub disimpan aman di Vercel sebagai environment variable <code>GITHUB_TOKEN</code>; jangan tempelkan token di browser.
         </div>
+
+        <section className="rounded-2xl border border-violet-500/30 bg-[#121217] p-5 space-y-4">
+          <div>
+            <h2 className="text-sm font-bold text-white font-mono uppercase">Kelola Akses Premium Discord</h2>
+            <p className="mt-1 text-xs text-zinc-400">
+              Premium aktif sampai tanggal kedaluwarsa. Firebase Admin dan Storage privat harus dikonfigurasi di Vercel.
+            </p>
+          </div>
+          <form onSubmit={handleGrantPremium} className="grid grid-cols-1 md:grid-cols-[1fr_180px_auto] gap-3">
+            <input
+              value={premiumDiscordId}
+              onChange={(event) => setPremiumDiscordId(event.target.value)}
+              placeholder="Discord User ID"
+              inputMode="numeric"
+              maxLength={20}
+              required
+              className="rounded-lg border border-zinc-700 bg-black px-3 py-2 text-xs font-mono text-white"
+            />
+            <select
+              value={premiumDurationDays}
+              onChange={(event) => setPremiumDurationDays(Number(event.target.value))}
+              className="rounded-lg border border-zinc-700 bg-black px-3 py-2 text-xs text-white"
+            >
+              <option value={7}>7 hari</option>
+              <option value={30}>30 hari</option>
+              <option value={90}>90 hari</option>
+              <option value={365}>1 tahun</option>
+            </select>
+            <button
+              type="submit"
+              disabled={isSavingPremiumUser}
+              className="rounded-lg bg-violet-400 px-4 py-2 text-xs font-bold text-black disabled:opacity-50"
+            >
+              {isSavingPremiumUser ? 'Menyimpan...' : 'Tambah / Perpanjang'}
+            </button>
+          </form>
+          {premiumUsers.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {premiumUsers.map((user) => (
+                <div key={user.discordId} className="flex items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-black/50 px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-mono text-white">{user.discordId}</p>
+                    <p className="text-[10px] text-zinc-400">
+                      Habis: {new Date(user.expiresAt).toLocaleString('id-ID')}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleRevokePremium(user.discordId)}
+                    className="shrink-0 rounded border border-red-500/30 px-2 py-1 text-[10px] text-red-300 hover:bg-red-500/10"
+                  >
+                    Cabut
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[11px] text-zinc-500">Belum ada user Premium aktif.</p>
+          )}
+        </section>
 
         {/* 2-Column Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
@@ -992,6 +1131,23 @@ export default function AdminPanelPage() {
                 </div>
               </div>
 
+              <div>
+                <label className="block text-xs font-mono text-zinc-300 mb-1">Akses Produk:</label>
+                <select
+                  value={isPremiumProduct ? 'premium' : 'free'}
+                  onChange={(event) => setIsPremiumProduct(event.target.value === 'premium')}
+                  className="w-full rounded-xl border border-zinc-700 bg-black px-3 py-2 text-xs text-white focus:border-white focus:outline-none"
+                >
+                  <option value="free">Free — metadata dan aset dapat diakses publik</option>
+                  <option value="premium">Premium — file dan ID disimpan privat</option>
+                </select>
+                {isPremiumProduct && (
+                  <p className="mt-1 text-[10px] text-amber-300">
+                    Perlu Firebase Admin di Vercel. File/ID produk ini tidak akan ditampilkan ke user Free.
+                  </p>
+                )}
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-mono text-zinc-300 mb-1">Subkategori:</label>
@@ -1150,6 +1306,11 @@ export default function AdminPanelPage() {
                             <span className="rounded bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 text-[10px] font-mono font-bold text-amber-400 flex items-center gap-1">
                               <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
                               BELUM LIVE
+                            </span>
+                          )}
+                          {item.isPremium && (
+                            <span className="rounded bg-violet-500/10 border border-violet-500/30 px-2 py-0.5 text-[10px] font-mono font-bold text-violet-300">
+                              PREMIUM
                             </span>
                           )}
                           <span className="text-[11px] font-mono text-zinc-400">

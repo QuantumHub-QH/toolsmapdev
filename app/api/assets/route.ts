@@ -10,6 +10,7 @@ import { db } from '@/lib/firebase';
 import { collection, getDocs } from 'firebase/firestore';
 import { fetchProductsFromGitHub } from '@/lib/github';
 import { getLiveStats } from '@/lib/stats';
+import { sanitizePublicAsset } from '@/lib/assets';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
 
@@ -66,13 +67,13 @@ export async function GET(request: NextRequest) {
   const allAssets = rawAssets.map((asset) => {
     const globalDl = globalStats.downloads[asset.id] || 0;
     const baseDl = asset.stats?.downloads || 0;
-    return {
+    return sanitizePublicAsset({
       ...asset,
       stats: {
         ...asset.stats,
         downloads: Math.max(globalDl, baseDl),
       },
-    };
+    });
   });
 
   let filtered = allAssets;

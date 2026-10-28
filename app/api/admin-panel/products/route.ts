@@ -11,6 +11,13 @@ import { db } from '@/lib/firebase';
 import { collection, doc, setDoc, deleteDoc, getDocs } from 'firebase/firestore';
 import { fetchProductsFromGitHub, commitProductsToGitHub } from '@/lib/github';
 import { verifyAdminSession } from '@/lib/security';
+import {
+  getPremiumProductRecord,
+  getPremiumProductsForAdmin,
+  removePremiumProduct,
+  sanitizePremiumAsset,
+  storePremiumProduct,
+} from '@/lib/premium';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
 
@@ -86,18 +93,28 @@ function isAuthorized(request: NextRequest): boolean {
   return false;
 }
 
-export async function GET() {
-  const products = await getProducts();
-  return NextResponse.json({
-    success: true,
-    data: products,
-    count: products.length,
-    timestamp: Date.now(),
-  }, {
-    headers: {
-      'Cache-Control': 'no-store, no-cache, must-revalidate',
-    },
-  });
+export async function GET(request: NextRequest) {
+  if (!isAuthorized(request)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
+
+  try {
+    const products = await getPremiumProductsForAdmin(await getProducts());
+    return NextResponse.json({
+      success: true,
+      data: products,
+      count: products.length,
+      timestamp: Date.now(),
+    }, {
+      headers: { 'Cache-Control': 'private, no-store' },
+    });
+  } catch (error) {
+    console.error('Failed to load admin products:', error);
+    return NextResponse.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Gagal memuat produk admin.',
+    }, { status: 503 });
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -118,16 +135,34 @@ export async function POST(request: NextRequest) {
       for (const product of await getProducts()) {
         if (product?.id) productMap.set(product.id, product);
       }
+      const privateRemovals: string[] = [];
       for (const product of bulkList) {
-        if (product?.id) productMap.set(product.id, product);
+        if (!product?.id) continue;
+        const previous = productMap.get(product.id);
+        if (product.isPremium) {
+          productMap.set(product.id, await storePremiumProduct(product));
+        } else {
+          if (previous?.isPremium) {
+            const privateRecord = await getPremiumProductRecord(product.id);
+            if (privateRecord?.filePath && !product.fileData) {
+              return NextResponse.json({
+                success: false,
+                error: `Produk "${product.title}" memakai file privat. Upload ulang file atau masukkan URL publik sebelum mengubahnya menjadi Free.`,
+              }, { status: 400 });
+            }
+            privateRemovals.push(product.id);
+          }
+          productMap.set(product.id, product);
+        }
       }
       const mergedProducts = Array.from(productMap.values());
+      const publicProducts = mergedProducts.map(sanitizePremiumAsset);
 
       // 1. Write each to Firestore if configured
       if (db) {
         try {
           for (const item of bulkList) {
-            await setDoc(doc(db, 'products', item.id), item);
+            await setDoc(doc(db, 'products', item.id), sanitizePremiumAsset(productMap.get(item.id)!));
           }
         } catch (e) {
           console.warn('Bulk Firestore write warning:', e);
@@ -135,11 +170,11 @@ export async function POST(request: NextRequest) {
       }
 
       // 2. Write local
-      writeLocal(mergedProducts);
+      writeLocal(publicProducts);
 
       // 3. Commit all to GitHub
       const syncRes = await commitProductsToGitHub(
-        mergedProducts,
+        publicProducts,
         `feat(catalog): publish ${bulkList.length} pending products to public catalog [skip ci]`
       );
 
@@ -150,10 +185,12 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      await Promise.all(privateRemovals.map((productId) => removePremiumProduct(productId)));
+      const adminProducts = await getPremiumProductsForAdmin(publicProducts);
       return NextResponse.json({
         success: true,
         message: `Berhasil sinkronisasi ${bulkList.length} produk ke publik!`,
-        data: mergedProducts,
+        data: adminProducts,
         syncedWithGitHub: syncRes.success,
       });
     }
@@ -211,33 +248,50 @@ export async function POST(request: NextRequest) {
         : { downloads: 0, favorites: 0, views: 1 },
       updatedAt: nowIso,
       license: productData.license || 'Free Community Asset',
+      isPremium: Boolean(productData.isPremium),
     };
 
+    let catalogProduct = formattedProduct;
+    let shouldRemovePrivateProduct = false;
+    if (formattedProduct.isPremium) {
+      catalogProduct = await storePremiumProduct(formattedProduct);
+    } else if (existingProduct?.isPremium) {
+      const privateRecord = await getPremiumProductRecord(formattedProduct.id);
+      if (privateRecord?.filePath && !formattedProduct.fileData) {
+        return NextResponse.json({
+          success: false,
+          error: 'Produk ini memakai file privat. Upload ulang file atau masukkan URL publik sebelum mengubahnya menjadi Free.',
+        }, { status: 400 });
+      }
+      shouldRemovePrivateProduct = true;
+    }
+
     // Insert or update in map
-    productMap.set(formattedProduct.id, formattedProduct);
+    productMap.set(formattedProduct.id, catalogProduct);
 
     // Turn map into list (newest first)
     const updatedList = Array.from(productMap.values());
     const finalList = [
-      formattedProduct,
-      ...updatedList.filter((p) => p.id !== formattedProduct.id),
+      catalogProduct,
+      ...updatedList.filter((p) => p.id !== catalogProduct.id),
     ];
+    const publicProducts = finalList.map(sanitizePremiumAsset);
 
     // 1. Save to Firestore if configured
     if (db) {
       try {
-        await setDoc(doc(db, 'products', formattedProduct.id), formattedProduct);
+        await setDoc(doc(db, 'products', formattedProduct.id), sanitizePremiumAsset(catalogProduct));
       } catch (e) {
         console.warn('Firestore setDoc failed:', e);
       }
     }
 
     // 2. Write local
-    writeLocal(finalList);
+    writeLocal(publicProducts);
 
     // 3. Commit to GitHub
     const syncRes = await commitProductsToGitHub(
-      finalList,
+      publicProducts,
       `feat(catalog): add/update "${formattedProduct.title}" [skip ci]`
     );
 
@@ -252,10 +306,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (shouldRemovePrivateProduct) await removePremiumProduct(formattedProduct.id);
     return NextResponse.json({
       success: true,
       message: syncRes.message || 'Produk berhasil di-publish ke publik!',
-      data: finalList,
+      data: await getPremiumProductsForAdmin(publicProducts),
       syncedWithGitHub: syncRes.success,
     });
   } catch (err: any) {
@@ -296,6 +351,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     const currentProducts = await getProducts();
+    const deletedProduct = currentProducts.find((product) => product.id === id);
     const updatedList = currentProducts.filter((p) => p.id !== id);
 
     // 2. Write local
@@ -306,6 +362,10 @@ export async function DELETE(request: NextRequest) {
       updatedList,
       `chore(catalog): delete asset ${id} [skip ci]`
     );
+    if (!syncRes.success) {
+      return NextResponse.json({ success: false, error: syncRes.message }, { status: 502 });
+    }
+    if (deletedProduct?.isPremium) await removePremiumProduct(id);
 
     return NextResponse.json({
       success: true,

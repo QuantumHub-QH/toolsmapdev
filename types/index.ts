@@ -36,6 +36,8 @@ export interface Asset {
   format: AssetFormat;
   license: string;
   updatedAt: string;
+  isPremium?: boolean;
+  hasPrivateFile?: boolean;
 }
 
 export interface DevToolItem {

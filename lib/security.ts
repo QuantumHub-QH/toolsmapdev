@@ -1,11 +1,15 @@
 import crypto from 'crypto';
 
-const ADMIN_SECRET = process.env.ADMIN_PASSWORD || 'rikigantengZ55';
+function getAdminSecret(): string {
+  const secret = process.env.ADMIN_PASSWORD;
+  if (!secret) throw new Error('ADMIN_PASSWORD belum dikonfigurasi di server.');
+  return secret;
+}
 
 // 1. Cryptographically Secure Session Generation & Verification
 export function generateAdminSession(): string {
   const timestamp = Date.now().toString();
-  const signature = crypto.createHmac('sha256', ADMIN_SECRET).update(timestamp).digest('hex');
+  const signature = crypto.createHmac('sha256', getAdminSecret()).update(timestamp).digest('hex');
   return Buffer.from(`${timestamp}.${signature}`).toString('base64');
 }
 
@@ -22,7 +26,7 @@ export function verifyAdminSession(token?: string | null): boolean {
       return false;
     }
 
-    const expected = crypto.createHmac('sha256', ADMIN_SECRET).update(timestampStr).digest('hex');
+    const expected = crypto.createHmac('sha256', getAdminSecret()).update(timestampStr).digest('hex');
     const sigBuf = Buffer.from(signature);
     const expBuf = Buffer.from(expected);
 
