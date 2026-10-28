@@ -21,9 +21,19 @@ import {
   Box,
   FileUp,
   FileCode,
-  HardDrive
+  HardDrive,
+  Crown,
+  UserPlus,
+  CalendarClock
 } from 'lucide-react';
 import { Asset, AssetCategory, AssetFormat } from '@/types';
+import { PREMIUM_DURATIONS, PremiumDuration } from '@/lib/premium-config';
+
+interface PremiumUserEntry {
+  discordId: string;
+  grantedAt: string;
+  expiresAt: string;
+}
 
 const MAX_PUBLISH_REQUEST_BYTES = 3 * 1024 * 1024;
 const PUBLISH_REQUEST_TIMEOUT_MS = 35_000;
@@ -113,6 +123,10 @@ export default function AdminPanelPage() {
   const [products, setProducts] = useState<Asset[]>([]);
   const [liveProductIds, setLiveProductIds] = useState<Set<string>>(new Set());
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [premiumUsers, setPremiumUsers] = useState<PremiumUserEntry[]>([]);
+  const [premiumDiscordId, setPremiumDiscordId] = useState('');
+  const [premiumDuration, setPremiumDuration] = useState<PremiumDuration>('1m');
+  const [premiumLoading, setPremiumLoading] = useState(false);
 
   // Form Fields
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -144,6 +158,7 @@ export default function AdminPanelPage() {
     if (savedAuth === 'authenticated') {
       setIsAuthenticated(true);
       fetchProducts();
+      fetchPremiumUsers();
     }
 
     const savedLock = localStorage.getItem('admin_lock_until');
@@ -198,6 +213,7 @@ export default function AdminPanelPage() {
         sessionStorage.setItem('admin_panel_session', data.token || 'authenticated');
         setFailCount(0);
         fetchProducts();
+        fetchPremiumUsers();
       } else {
         const nextFails = failCount + 1;
         setFailCount(nextFails);
@@ -221,7 +237,79 @@ export default function AdminPanelPage() {
   const handleLogout = () => {
     sessionStorage.removeItem('admin_panel_session');
     setIsAuthenticated(false);
+    setPremiumUsers([]);
     setPasswordInput('');
+  };
+
+  const fetchPremiumUsers = async () => {
+    try {
+      const response = await fetch('/api/admin-panel/premium-users?t=' + Date.now(), { cache: 'no-store' });
+      const data: { success?: boolean; data?: PremiumUserEntry[]; error?: string } = await response.json();
+      if (!response.ok || !data.success || !Array.isArray(data.data)) {
+        throw new Error(data.error || `Gagal memuat user Premium (HTTP ${response.status}).`);
+      }
+      setPremiumUsers(data.data);
+    } catch (error) {
+      setStatusMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'Gagal memuat daftar Premium.',
+      });
+    }
+  };
+
+  const handleGrantPremium = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setPremiumLoading(true);
+    try {
+      const response = await fetch('/api/admin-panel/premium-users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ discordId: premiumDiscordId, duration: premiumDuration }),
+      });
+      const data: { success?: boolean; data?: PremiumUserEntry; error?: string } = await response.json();
+      if (!response.ok || !data.success || !data.data) {
+        throw new Error(data.error || `Gagal menambahkan Premium (HTTP ${response.status}).`);
+      }
+
+      const grantedUser = data.data;
+      setPremiumUsers((current) => [
+        ...current.filter((user) => user.discordId !== grantedUser.discordId),
+        grantedUser,
+      ].sort((a, b) => Date.parse(a.expiresAt) - Date.parse(b.expiresAt)));
+      setPremiumDiscordId('');
+      setStatusMessage({ type: 'success', text: 'Akses Premium berhasil ditambahkan atau diperpanjang.' });
+    } catch (error) {
+      setStatusMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'Gagal menambahkan akses Premium.',
+      });
+    } finally {
+      setPremiumLoading(false);
+    }
+  };
+
+  const handleRemovePremium = async (discordId: string) => {
+    if (!confirm(`Hapus akses Premium untuk Discord ID ${discordId}?`)) return;
+    setPremiumLoading(true);
+    try {
+      const response = await fetch(`/api/admin-panel/premium-users?discordId=${encodeURIComponent(discordId)}`, {
+        method: 'DELETE',
+      });
+      const data: { success?: boolean; error?: string } = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || `Gagal menghapus akses Premium (HTTP ${response.status}).`);
+      }
+
+      setPremiumUsers((current) => current.filter((user) => user.discordId !== discordId));
+      setStatusMessage({ type: 'success', text: 'Akses Premium berhasil dihapus.' });
+    } catch (error) {
+      setStatusMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'Gagal menghapus akses Premium.',
+      });
+    } finally {
+      setPremiumLoading(false);
+    }
   };
 
   const fetchProducts = async () => {
@@ -779,6 +867,111 @@ export default function AdminPanelPage() {
           Token GitHub disimpan aman di Vercel sebagai environment variable <code>GITHUB_TOKEN</code>; jangan tempelkan token di browser.
         </div>
 
+        <section className="rounded-2xl border border-amber-500/25 bg-[#101014] p-5 shadow-xl sm:p-6">
+          <div className="mb-5 flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-400/30 bg-amber-400/10 text-amber-300">
+              <Crown className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold uppercase tracking-wide text-white">Kelola User Premium</h2>
+              <p className="mt-1 text-xs text-zinc-400">
+                Status memakai Discord ID dan kedaluwarsa otomatis. Menambahkan ulang akan memperpanjang masa aktif yang masih tersisa.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-2">
+            <form onSubmit={handleGrantPremium} className="space-y-3 rounded-xl border border-zinc-800 bg-black/30 p-4">
+              <label className="block text-xs font-mono text-zinc-300">
+                Discord User ID
+                <input
+                  type="text"
+                  required
+                  inputMode="numeric"
+                  pattern="[0-9]{17,20}"
+                  maxLength={20}
+                  value={premiumDiscordId}
+                  onChange={(event) => setPremiumDiscordId(event.target.value.replace(/\D/g, ''))}
+                  placeholder="Contoh: 123456789012345678"
+                  className="mt-1.5 w-full rounded-lg border border-zinc-700 bg-black px-3 py-2.5 text-sm text-white placeholder-zinc-600 focus:border-amber-400 focus:outline-none"
+                />
+              </label>
+
+              <label className="block text-xs font-mono text-zinc-300">
+                Masa aktif
+                <select
+                  value={premiumDuration}
+                  onChange={(event) => setPremiumDuration(event.target.value as PremiumDuration)}
+                  className="mt-1.5 w-full rounded-lg border border-zinc-700 bg-black px-3 py-2.5 text-sm text-white focus:border-amber-400 focus:outline-none"
+                >
+                  {PREMIUM_DURATIONS.map((duration) => (
+                    <option key={duration.value} value={duration.value}>{duration.label}</option>
+                  ))}
+                </select>
+              </label>
+
+              <button
+                type="submit"
+                disabled={premiumLoading}
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-amber-400 px-4 py-2.5 text-xs font-bold font-mono text-black transition-colors hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <UserPlus className="h-4 w-4" />
+                {premiumLoading ? 'MENYIMPAN...' : 'TAMBAH / PERPANJANG PREMIUM'}
+              </button>
+            </form>
+
+            <div className="rounded-xl border border-zinc-800 bg-black/30 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h3 className="text-xs font-bold font-mono uppercase text-zinc-200">
+                  Daftar Premium ({premiumUsers.length})
+                </h3>
+                <button
+                  type="button"
+                  onClick={fetchPremiumUsers}
+                  disabled={premiumLoading}
+                  className="rounded-md border border-zinc-700 p-1.5 text-zinc-400 hover:text-white disabled:opacity-50"
+                  title="Refresh daftar Premium"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${premiumLoading ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+
+              {premiumUsers.length === 0 ? (
+                <p className="py-6 text-center text-xs text-zinc-500">Belum ada user Premium.</p>
+              ) : (
+                <ul className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                  {[...premiumUsers].sort((a, b) => Date.parse(a.expiresAt) - Date.parse(b.expiresAt)).map((user) => {
+                    const isActive = Date.parse(user.expiresAt) > Date.now();
+                    return (
+                      <li
+                        key={user.discordId}
+                        className="flex items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2.5"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate font-mono text-xs font-semibold text-white">{user.discordId}</p>
+                          <p className={`mt-1 flex items-center gap-1 text-[10px] ${isActive ? 'text-emerald-400' : 'text-red-400'}`}>
+                            <CalendarClock className="h-3 w-3" />
+                            {isActive ? 'Aktif sampai' : 'Kedaluwarsa'} {new Date(user.expiresAt).toLocaleString('id-ID')}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemovePremium(user.discordId)}
+                          disabled={premiumLoading}
+                          className="shrink-0 rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-red-400 transition-colors hover:bg-red-500/20 disabled:opacity-50"
+                          title="Hapus akses Premium"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+        </section>
+
         {/* 2-Column Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           
@@ -1021,7 +1214,7 @@ export default function AdminPanelPage() {
                 </select>
                 {isPremiumProduct && (
                   <p className="mt-1 text-[10px] text-amber-300">
-                    Download, Roblox ID, dan script tidak ditampilkan di katalog; tombol akan menghubungi Discord.
+                    User Premium aktif akan melihat tombol download/copy. User lain hanya melihat tombol ADD PREMIUM.
                   </p>
                 )}
               </div>

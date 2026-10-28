@@ -160,11 +160,17 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
 
-  // Daily Upload Limit via Discord (10/day, max 10/batch)
-  const [dailyQuota, setDailyQuota] = useState<{ limit: number; used: number; remaining: number }>({
+  // Free users are limited to ten successful uploads per day; Premium users are unlimited.
+  const [dailyQuota, setDailyQuota] = useState<{
+    limit: number;
+    used: number;
+    remaining: number;
+    unlimited: boolean;
+  }>({
     limit: 10,
     used: 0,
     remaining: 10,
+    unlimited: false,
   });
 
   // Audio Customization Settings
@@ -219,38 +225,24 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
     }
   }, []);
 
-  // Fetch / Sync Daily Quota for Discord User with local persistence
+  // The server is authoritative for both free quota and Premium status.
   const fetchDailyQuota = async () => {
     if (!discordUser || !discordUser.id) return;
-    const today = new Date().toISOString().split('T')[0];
-    const storageKey = `mapdev_quota_${discordUser.id}_${today}`;
-    
-    // 1. Instant load from localStorage so it never resets on refresh
-    let localUsed = 0;
     try {
-      const saved = localStorage.getItem(storageKey);
-      if (saved) {
-        localUsed = parseInt(saved, 10) || 0;
+      const res = await fetch('/api/roblox/limit', { cache: 'no-store' });
+      const data: {
+        success?: boolean;
+        limit?: number;
+        used?: number;
+        remaining?: number;
+        unlimited?: boolean;
+      } = await res.json();
+      if (res.ok && data.success) {
         setDailyQuota({
-          limit: 10,
-          used: localUsed,
-          remaining: Math.max(0, 10 - localUsed),
-        });
-      }
-    } catch (e) {}
-
-    // 2. Fetch live from backend & GitHub
-    try {
-      const res = await fetch(`/api/roblox/limit?discordId=${encodeURIComponent(discordUser.id)}`);
-      const data = await res.json();
-      if (data.success) {
-        // Take whichever used is higher so quota NEVER resets backward on refresh
-        const actualUsed = Math.max(data.used || 0, localUsed);
-        localStorage.setItem(storageKey, String(actualUsed));
-        setDailyQuota({
-          limit: 10,
-          used: actualUsed,
-          remaining: Math.max(0, 10 - actualUsed),
+          limit: data.limit ?? 10,
+          used: data.used ?? 0,
+          remaining: data.remaining ?? 0,
+          unlimited: Boolean(data.unlimited),
         });
       }
     } catch (e) {
@@ -260,7 +252,7 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
 
   useEffect(() => {
     fetchDailyQuota();
-  }, [discordUser]);
+  }, [discordUser?.id, discordUser?.isPremium]);
 
   // Recommended In-Game Roblox PlaybackSpeed
   const recommendedPlaybackSpeed = audioSpeed > 0 ? (1 / audioSpeed).toFixed(2) : '1.00';
@@ -329,7 +321,7 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
       return;
     }
 
-    if (dailyQuota.remaining <= 0) {
+    if (!dailyQuota.unlimited && dailyQuota.remaining <= 0) {
       alert('Kuota upload hari ini sudah habis (10/10). Kuota akan reset kembali pada jam 00:00!');
       return;
     }
@@ -462,12 +454,13 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
 
-    if (dailyQuota.remaining <= 0) {
+    if (!dailyQuota.unlimited && dailyQuota.remaining <= 0) {
       alert('Kuota upload hari ini sudah habis (10/10). Kuota akan reset kembali pada jam 00:00!');
       return;
     }
 
-    const maxCanAdd = Math.min(10 - audioQueue.length, dailyQuota.remaining - audioQueue.length);
+    const availableQuota = dailyQuota.unlimited ? 10 : dailyQuota.remaining;
+    const maxCanAdd = Math.min(10 - audioQueue.length, availableQuota - audioQueue.length);
 
     if (maxCanAdd <= 0) {
       alert(`Maksimal 10 file per batch dan sisa kuota hari ini adalah ${dailyQuota.remaining} file!`);
@@ -503,12 +496,13 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
 
-    if (dailyQuota.remaining <= 0) {
+    if (!dailyQuota.unlimited && dailyQuota.remaining <= 0) {
       alert('Kuota upload hari ini sudah habis (10/10). Kuota akan reset kembali pada jam 00:00!');
       return;
     }
 
-    const maxCanAdd = Math.min(10 - imageQueue.length, dailyQuota.remaining - imageQueue.length);
+    const availableQuota = dailyQuota.unlimited ? 10 : dailyQuota.remaining;
+    const maxCanAdd = Math.min(10 - imageQueue.length, availableQuota - imageQueue.length);
 
     if (maxCanAdd <= 0) {
       alert(`Maksimal 10 file per batch dan sisa kuota hari ini adalah ${dailyQuota.remaining} file!`);
@@ -593,7 +587,7 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
       return;
     }
 
-    if (dailyQuota.remaining <= 0) {
+    if (!dailyQuota.unlimited && dailyQuota.remaining <= 0) {
       alert('Kuota upload kamu hari ini sudah habis (10/10). Tunggu reset esok hari jam 00:00!');
       return;
     }
@@ -657,41 +651,6 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
             )
           );
 
-          // Decrement daily limit immediately in localStorage & sync to API
-          try {
-            const today = new Date().toISOString().split('T')[0];
-            const storageKey = `mapdev_quota_${discordUser.id}_${today}`;
-            const currentSaved = parseInt(localStorage.getItem(storageKey) || '0', 10);
-            const newUsed = currentSaved + 1;
-            localStorage.setItem(storageKey, String(newUsed));
-            
-            // Immediate state update
-            setDailyQuota({
-              limit: 10,
-              used: newUsed,
-              remaining: Math.max(0, 10 - newUsed),
-            });
-
-            const limitRes = await fetch('/api/roblox/limit', {
-              method: 'POST',
-              headers: { 
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ discordId: discordUser.id, count: 1 }),
-            });
-            const limitData = await limitRes.json();
-            if (limitData.success) {
-              const maxUsed = Math.max(limitData.used, newUsed);
-              localStorage.setItem(storageKey, String(maxUsed));
-              setDailyQuota({
-                limit: limitData.limit,
-                used: maxUsed,
-                remaining: Math.max(0, limitData.limit - maxUsed),
-              });
-            }
-          } catch (e) {
-            console.error('Error updating limit:', e);
-          }
         } else {
           setQueue((prev) =>
             prev.map((q) =>
@@ -719,6 +678,7 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
       await new Promise((r) => setTimeout(r, 500));
     }
 
+    await fetchDailyQuota();
     setIsUploading(false);
   };
 
@@ -830,13 +790,15 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                 </span>
                 {discordUser && (
                   <span className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded font-mono">
-                    Limit Aktif
+                    {discordUser.isPremium ? 'Premium Aktif' : 'Limit Aktif'}
                   </span>
                 )}
               </div>
               <p className="text-xs text-zinc-400 mt-0.5">
                 {discordUser
-                  ? 'Sistem kuota upload harian terhubung ke akun Discord kamu (Aman & Tidak reset saat redeploy).'
+                  ? discordUser.isPremium
+                    ? 'Akun Premium aktif: upload audio dan gambar tanpa batas harian selama masa aktif.'
+                    : 'Kuota gratis 10 upload sukses per hari, diverifikasi server dan terhubung ke akun Discord.'
                   : 'Harap login Discord terlebih dahulu agar kuota upload harian dapat tersimpan.'}
               </p>
             </div>
@@ -845,9 +807,11 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
           <div className="flex items-center gap-4 shrink-0">
             {/* Daily Quota Counter */}
             <div className="rounded-xl border border-zinc-700 bg-black/60 px-4 py-2 text-center">
-              <span className="text-[10px] font-mono text-zinc-500 block uppercase">Sisa Kuota Hari Ini</span>
-              <span className={`text-base font-mono font-bold ${dailyQuota.remaining > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                {dailyQuota.remaining} / {dailyQuota.limit} Upload
+              <span className="text-[10px] font-mono text-zinc-500 block uppercase">
+                {dailyQuota.unlimited ? 'Premium Upload' : 'Sisa Kuota Hari Ini'}
+              </span>
+              <span className={`text-base font-mono font-bold ${dailyQuota.unlimited || dailyQuota.remaining > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {dailyQuota.unlimited ? 'Unlimited' : `${dailyQuota.remaining} / ${dailyQuota.limit} Upload`}
               </span>
             </div>
 
@@ -1260,7 +1224,9 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                   </p>
                 </div>
                 <div className="inline-flex items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/20 px-3.5 py-1 text-xs font-mono text-blue-300">
-                  <span>Batch Saat Ini: {audioQueue.length} / 10 Audio • Sisa Kuota Hari Ini: {dailyQuota.remaining}</span>
+                  <span>
+                    Batch Saat Ini: {audioQueue.length} / 10 Audio • {dailyQuota.unlimited ? 'Kuota Harian: Unlimited' : `Sisa Kuota Hari Ini: ${dailyQuota.remaining}`}
+                  </span>
                 </div>
               </label>
             </div>
@@ -1413,7 +1379,7 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                     <button
                       type="button"
                       onClick={handleAddFetchedToQueue}
-                      disabled={isAddingFetched || dailyQuota.remaining <= 0 || audioQueue.length >= 10}
+                      disabled={isAddingFetched || (!dailyQuota.unlimited && dailyQuota.remaining <= 0) || audioQueue.length >= 10}
                       className="flex-1 md:flex-none flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-xs font-mono font-bold text-white transition-all shadow-md active:scale-95 disabled:opacity-40"
                     >
                       {isAddingFetched ? (
@@ -1457,7 +1423,7 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => handleStartBulkUpload('audio')}
-                      disabled={isUploading || !robloxSession || !discordUser || dailyQuota.remaining <= 0}
+                      disabled={isUploading || !robloxSession || !discordUser || (!dailyQuota.unlimited && dailyQuota.remaining <= 0)}
                       className="flex items-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-500 px-4 py-2 text-xs font-mono font-bold text-white transition-all shadow-md active:scale-95 disabled:opacity-50"
                     >
                       <Upload className={`h-3.5 w-3.5 ${isUploading ? 'animate-bounce' : ''}`} />
@@ -1611,7 +1577,9 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                   </p>
                 </div>
                 <div className="inline-flex items-center gap-2 rounded-full border border-purple-500/30 bg-purple-500/20 px-3.5 py-1 text-xs font-mono text-purple-300">
-                  <span>Batch Saat Ini: {imageQueue.length} / 10 Gambar • Sisa Kuota Hari Ini: {dailyQuota.remaining}</span>
+                  <span>
+                    Batch Saat Ini: {imageQueue.length} / 10 Gambar • {dailyQuota.unlimited ? 'Kuota Harian: Unlimited' : `Sisa Kuota Hari Ini: ${dailyQuota.remaining}`}
+                  </span>
                 </div>
               </label>
             </div>
@@ -1640,7 +1608,7 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => handleStartBulkUpload('image')}
-                      disabled={isUploading || !robloxSession || !discordUser || dailyQuota.remaining <= 0}
+                      disabled={isUploading || !robloxSession || !discordUser || (!dailyQuota.unlimited && dailyQuota.remaining <= 0)}
                       className="flex items-center gap-2 rounded-lg bg-purple-600 hover:bg-purple-500 px-4 py-2 text-xs font-mono font-bold text-white transition-all shadow-md active:scale-95 disabled:opacity-50"
                     >
                       <Upload className={`h-3.5 w-3.5 ${isUploading ? 'animate-bounce' : ''}`} />

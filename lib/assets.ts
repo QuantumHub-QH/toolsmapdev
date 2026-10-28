@@ -17,3 +17,7 @@ export function sanitizePublicAsset(asset: Asset): Asset {
     hasPrivateFile: Boolean(fileData || fileName),
   };
 }
+
+export function sanitizeAssetForUser(asset: Asset, hasPremiumAccess: boolean): Asset {
+  return asset.isPremium && !hasPremiumAccess ? sanitizePublicAsset(asset) : asset;
+}

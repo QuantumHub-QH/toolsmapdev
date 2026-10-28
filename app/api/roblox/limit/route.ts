@@ -1,166 +1,99 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import { getGitHubToken } from '@/lib/github';
+import { getDiscordSession } from '@/lib/discord-session';
+import { getPremiumEntitlement } from '@/lib/premium';
+import { DailyUploadLimitError, getDailyUsage, reserveDailyUploads } from '@/lib/upload-limits';
 
-const LIMITS_FILE_PATH = path.join(process.cwd(), 'data', 'limits.json');
-const GITHUB_REPO = 'QuantumHub-QH/mchlern';
-const GITHUB_FILE_PATH = 'data/limits.json';
-const DAILY_LIMIT = 10;
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
-function getTodayString(): string {
-  // Use Jakarta WIB / UTC+7 or current local date YYYY-MM-DD
-  const now = new Date();
-  return now.toISOString().split('T')[0];
-}
-
-async function getLimitsMap(): Promise<Record<string, { date: string; used: number }>> {
-  const token = getGitHubToken();
-  if (token) {
-    try {
-      const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}?ref=main&t=${Date.now()}`, {
-        cache: 'no-store',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/vnd.github.v3.raw',
-          'User-Agent': 'MapDev-Limits',
-        },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (typeof data === 'object' && data !== null) return data;
-      }
-    } catch (error) {
-      console.warn('GitHub limits fetch warning:', error);
-    }
-  }
-
-  try {
-    if (fs.existsSync(LIMITS_FILE_PATH)) {
-      const content = fs.readFileSync(LIMITS_FILE_PATH, 'utf-8');
-      const parsed = JSON.parse(content);
-      if (typeof parsed === 'object' && parsed !== null) return parsed;
-    }
-  } catch (e) {}
-
-  return {};
-}
-
-function writeLimitsLocal(data: Record<string, { date: string; used: number }>) {
-  try {
-    const dir = path.dirname(LIMITS_FILE_PATH);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(LIMITS_FILE_PATH, JSON.stringify(data, null, 2), 'utf-8');
-  } catch (e) {}
-}
-
-async function syncLimitsToGitHub(data: Record<string, { date: string; used: number }>) {
-  const token = process.env.GITHUB_TOKEN?.trim();
-  if (!token) return;
-  try {
-    const getRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github.v3+json',
-        'User-Agent': 'MapDev-Limits',
-      },
-      cache: 'no-store',
-    });
-
-    let sha: string | undefined = undefined;
-    if (getRes.ok) {
-      const fileData = await getRes.json();
-      sha = fileData.sha;
-    }
-
-    const contentBase64 = Buffer.from(JSON.stringify(data, null, 2)).toString('base64');
-    await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`, {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github.v3+json',
-        'Content-Type': 'application/json',
-        'User-Agent': 'MapDev-Limits',
-      },
-      body: JSON.stringify({
-        message: `chore: update user daily upload limits [skip ci]`,
-        content: contentBase64,
-        sha,
-        branch: 'main',
-      }),
-    });
-  } catch (err) {
-    console.error('Failed to sync limits to GitHub:', err);
-  }
+function unlimitedResponse(discordId: string) {
+  return {
+    success: true,
+    discordId,
+    limit: -1,
+    used: 0,
+    remaining: -1,
+    unlimited: true,
+  };
 }
 
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const discordId = searchParams.get('discordId');
-
-  if (!discordId) {
-    return NextResponse.json({ success: false, error: 'Discord ID diperlukan' }, { status: 400 });
+  const session = getDiscordSession(request);
+  if (!session) {
+    return NextResponse.json({ success: false, error: 'Login Discord diperlukan.' }, { status: 401 });
   }
 
-  const today = getTodayString();
-  const limitsMap = await getLimitsMap();
-  const record = limitsMap[discordId];
+  try {
+    const entitlement = await getPremiumEntitlement(session.id);
+    if (entitlement.isPremium) {
+      return NextResponse.json(unlimitedResponse(session.id), {
+        headers: { 'Cache-Control': 'private, no-store' },
+      });
+    }
 
-  let used = 0;
-  if (record && record.date === today) {
-    used = record.used || 0;
+    const usage = await getDailyUsage(session.id);
+    const remaining = Math.max(0, 10 - usage.used);
+    return NextResponse.json({
+      success: true,
+      discordId: session.id,
+      date: usage.date,
+      limit: 10,
+      used: usage.used,
+      remaining,
+      unlimited: false,
+    }, { headers: { 'Cache-Control': 'private, no-store' } });
+  } catch (error) {
+    console.error('Upload quota lookup failed:', error);
+    return NextResponse.json(
+      { success: false, error: error instanceof Error ? error.message : 'Gagal memeriksa kuota upload.' },
+      { status: 503 }
+    );
   }
-
-  const remaining = Math.max(0, DAILY_LIMIT - used);
-
-  return NextResponse.json({
-    success: true,
-    discordId,
-    date: today,
-    limit: DAILY_LIMIT,
-    used,
-    remaining,
-  });
 }
 
 export async function POST(request: NextRequest) {
+  const session = getDiscordSession(request);
+  if (!session) {
+    return NextResponse.json({ success: false, error: 'Login Discord diperlukan.' }, { status: 401 });
+  }
+
   try {
     const body = await request.json();
-    const discordId = body.discordId;
-    const count = parseInt(body.count || 1, 10);
-    if (!discordId) {
-      return NextResponse.json({ success: false, error: 'Discord ID diperlukan' }, { status: 400 });
+    if (body.discordId !== undefined && body.discordId !== session.id) {
+      return NextResponse.json({ success: false, error: 'Discord ID tidak cocok dengan sesi aktif.' }, { status: 403 });
     }
 
-    const today = getTodayString();
-    const limitsMap = await getLimitsMap();
-    const currentRecord = limitsMap[discordId];
-
-    let currentUsed = 0;
-    if (currentRecord && currentRecord.date === today) {
-      currentUsed = currentRecord.used || 0;
+    const count = Number(body.count ?? 1);
+    if (!Number.isInteger(count) || count < 1 || count > 10) {
+      return NextResponse.json({ success: false, error: 'Jumlah upload tidak valid.' }, { status: 400 });
     }
 
-    const newUsed = currentUsed + count;
-    limitsMap[discordId] = {
-      date: today,
-      used: newUsed,
-    };
+    const entitlement = await getPremiumEntitlement(session.id);
+    if (entitlement.isPremium) {
+      return NextResponse.json(unlimitedResponse(session.id), {
+        headers: { 'Cache-Control': 'private, no-store' },
+      });
+    }
 
-    writeLimitsLocal(limitsMap);
-    await syncLimitsToGitHub(limitsMap);
-
-    const remaining = Math.max(0, DAILY_LIMIT - newUsed);
-
+    const usage = await reserveDailyUploads(session.id, count);
+    const remaining = Math.max(0, 10 - usage.used);
     return NextResponse.json({
       success: true,
-      discordId,
-      date: today,
-      limit: DAILY_LIMIT,
-      used: newUsed,
+      discordId: session.id,
+      date: usage.date,
+      limit: 10,
+      used: usage.used,
       remaining,
-    });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+      unlimited: false,
+    }, { headers: { 'Cache-Control': 'private, no-store' } });
+  } catch (error) {
+    if (error instanceof DailyUploadLimitError) {
+      return NextResponse.json({ success: false, error: error.message }, { status: 429 });
+    }
+    console.error('Upload quota update failed:', error);
+    return NextResponse.json(
+      { success: false, error: error instanceof Error ? error.message : 'Gagal memperbarui kuota upload.' },
+      { status: 503 }
+    );
   }
 }

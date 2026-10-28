@@ -64,6 +64,45 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!discordUser) return;
+
+    let isMounted = true;
+    const userId = discordUser.id;
+
+    const refreshPremiumStatus = async () => {
+      try {
+        const response = await fetch('/api/premium/status', { cache: 'no-store' });
+        const data: { isPremium?: boolean; expiresAt?: string | null; error?: string } = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Gagal memeriksa status Premium.');
+        if (!isMounted) return;
+
+        setDiscordUser((current) => current?.id === userId
+          ? {
+              ...current,
+              isPremium: Boolean(data.isPremium),
+              premiumExpiresAt: data.expiresAt || null,
+            }
+          : current);
+      } catch (error) {
+        if (!isMounted) return;
+        console.error('Premium status check failed:', error);
+        setDiscordUser((current) => current?.id === userId
+          ? { ...current, isPremium: false, premiumExpiresAt: null }
+          : current);
+        setToastMessage('Status Premium gagal diverifikasi. Akses Premium dikunci sementara.');
+        window.setTimeout(() => setToastMessage(null), 3000);
+      }
+    };
+
+    void refreshPremiumStatus();
+    const intervalId = window.setInterval(refreshPremiumStatus, 60_000);
+    return () => {
+      isMounted = false;
+      window.clearInterval(intervalId);
+    };
+  }, [discordUser?.id]);
+
   const refreshDiscordSession = async () => {
     const response = await fetch('/api/auth/discord/session', { cache: 'no-store' });
     const data: { user?: DiscordUser | null } = await response.json();
@@ -240,7 +279,17 @@ export default function Home() {
       }
     }
     fetchLiveAssets();
-  }, [discordUser]);
+  }, [discordUser?.id, discordUser?.isPremium]);
+
+  useEffect(() => {
+    if (
+      discordUser?.isPremium
+      || !selectedAsset?.isPremium
+      || !(selectedAsset.fileData || selectedAsset.downloadUrl || selectedAsset.robloxAssetId || selectedAsset.luauCode)
+    ) return;
+
+    setSelectedAsset(sanitizePublicAsset(selectedAsset));
+  }, [discordUser?.isPremium, selectedAsset]);
 
   // Real-time download handler
   const handleDownload = (assetId: string) => {
@@ -463,6 +512,7 @@ export default function Home() {
                   asset={asset}
                   onSelect={setSelectedAsset}
                   isBookmarked={bookmarkedIds.includes(asset.id)}
+                  hasPremiumAccess={Boolean(discordUser?.isPremium)}
                   onToggleBookmark={toggleBookmark}
                   onDownload={handleDownload}
                 />
@@ -484,6 +534,7 @@ export default function Home() {
         asset={selectedAsset}
         onClose={() => setSelectedAsset(null)}
         isBookmarked={selectedAsset ? bookmarkedIds.includes(selectedAsset.id) : false}
+        hasPremiumAccess={Boolean(discordUser?.isPremium)}
         onToggleBookmark={toggleBookmark}
         onDownload={handleDownload}
       />

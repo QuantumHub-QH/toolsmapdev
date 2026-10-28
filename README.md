@@ -64,15 +64,16 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## 🔒 Discord-Gated Product Catalog
 
-The public website requires a verified Discord login before showing the product catalog. Product API requests, favorites, and download-stat updates also require the server-signed HTTP-only Discord session cookie; product data is not embedded in the homepage bundle or browser storage. Products marked **Premium** show an **ADD PREMIUM** button linking to the configured Discord contact. Premium access is arranged manually over Discord; the site does not provide premium downloads or entitlement expiry.
+The public website requires a verified Discord login before showing the product catalog. Product API requests, favorites, and download-stat updates also require the server-signed HTTP-only Discord session cookie; product data is not embedded in the homepage bundle or browser storage. Products marked **Premium** show **ADD PREMIUM** to users without an active entitlement; active Premium users receive the normal download, asset-ID, and script actions. The **BUY PREMIUM** menu lists the manual Discord-contact plans: Rp10.000/week, Rp30.000/month, Rp50.000/3 months, and Rp100.000/8 months.
 
 To prevent direct access to the catalog outside the website:
 
 1. Change the GitHub repository `QuantumHub-QH/mchlern` to **Private** in GitHub Settings → General → Danger Zone. The Vercel Git integration must retain access to this private repo.
-2. Keep `GITHUB_TOKEN` configured in Vercel, with private-repository **Contents: Read and write** permission. The server uses the authenticated GitHub API to load and publish `data/products.json`; unauthenticated raw GitHub fallback is disabled. Product data is stored in this private repository; the catalog API strips Premium IDs, scripts, file data, and download links before returning product listings.
+2. Keep `GITHUB_TOKEN` configured in Vercel, with private-repository **Contents: Read and write** permission. The server uses the authenticated GitHub API to load and publish `data/products.json`, `data/premium-users.json`, and `data/limits.json`; unauthenticated raw GitHub fallback is disabled. Premium entitlements and upload limits are stored in the private repository. The catalog API only includes Premium IDs, scripts, file data, and download links for users whose server-verified Discord entitlement has not expired.
 3. Keep `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, and `DISCORD_REDIRECT_URI` configured; register the exact callback URL (`https://your-domain/api/auth/discord/callback`) in Discord Developer Portal. The client secret signs the Discord session cookie.
 4. Publish [`firestore.rules`](./firestore.rules) to Cloud Firestore if Firebase is used, so browser clients cannot read the fallback `products` collection directly.
 5. Keep a strong `ADMIN_PASSWORD` configured in Vercel. Set all variables for the target environment and redeploy after changing them.
+6. In Admin Panel → **Kelola User Premium**, enter the buyer's Discord user ID and choose a duration from one week through one year. Re-adding an active user extends from their current expiry; deleting the user revokes Premium immediately. Expired users automatically lose Premium features. Premium accounts have unlimited daily audio/image uploads; free accounts retain the server-enforced limit of 10 successful uploads per day.
 
 The repository is separate from the website's public availability: making the repo private should not make the deployed Vercel site private, provided Vercel retains repository access.
 

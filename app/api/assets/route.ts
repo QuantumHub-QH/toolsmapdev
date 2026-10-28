@@ -10,8 +10,9 @@ import { db } from '@/lib/firebase';
 import { collection, getDocs } from 'firebase/firestore';
 import { fetchProductsFromGitHub } from '@/lib/github';
 import { getLiveStats } from '@/lib/stats';
-import { sanitizePublicAsset } from '@/lib/assets';
+import { sanitizeAssetForUser } from '@/lib/assets';
 import { getDiscordSession } from '@/lib/discord-session';
+import { getPremiumEntitlement } from '@/lib/premium';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
 
@@ -58,7 +59,8 @@ async function getLiveAssets(): Promise<Asset[]> {
 }
 
 export async function GET(request: NextRequest) {
-  if (!getDiscordSession(request)) {
+  const session = getDiscordSession(request);
+  if (!session) {
     return NextResponse.json(
       { success: false, error: 'Login Discord diperlukan untuk melihat katalog.' },
       {
@@ -76,19 +78,36 @@ export async function GET(request: NextRequest) {
   const category = searchParams.get('category');
   const search = searchParams.get('search')?.toLowerCase();
 
-  const rawAssets = await getLiveAssets();
-  const globalStats = await getLiveStats();
+  let hasPremiumAccess = false;
+  let rawAssets: Asset[];
+  let globalStats: Awaited<ReturnType<typeof getLiveStats>>;
+  try {
+    const [entitlement, assets, stats] = await Promise.all([
+      getPremiumEntitlement(session.id),
+      getLiveAssets(),
+      getLiveStats(),
+    ]);
+    hasPremiumAccess = entitlement.isPremium;
+    rawAssets = assets;
+    globalStats = stats;
+  } catch (error) {
+    console.error('Failed to authorize premium catalog access:', error);
+    return NextResponse.json(
+      { success: false, error: 'Gagal memverifikasi akses Premium. Coba lagi sebentar.' },
+      { status: 503, headers: { 'Cache-Control': 'private, no-store' } }
+    );
+  }
 
   const allAssets = rawAssets.map((asset) => {
     const globalDl = globalStats.downloads[asset.id] || 0;
     const baseDl = asset.stats?.downloads || 0;
-    return sanitizePublicAsset({
+    return sanitizeAssetForUser({
       ...asset,
       stats: {
         ...asset.stats,
         downloads: Math.max(globalDl, baseDl),
       },
-    });
+    }, hasPremiumAccess);
   });
 
   let filtered = allAssets;

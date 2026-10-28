@@ -19,6 +19,7 @@ interface AssetCardProps {
   asset: Asset;
   onSelect: (asset: Asset) => void;
   isBookmarked: boolean;
+  hasPremiumAccess: boolean;
   onToggleBookmark: (id: string) => void;
   onDownload?: (assetId: string) => void;
 }
@@ -27,6 +28,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({
   asset,
   onSelect,
   isBookmarked,
+  hasPremiumAccess,
   onToggleBookmark,
   onDownload,
 }) => {
@@ -128,7 +130,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({
 
       {/* Card Action Footer */}
       <div className="mt-4 pt-3 border-t border-border/80 flex items-center justify-between gap-2">
-        {asset.isPremium ? (
+        {asset.isPremium && !hasPremiumAccess ? (
           <a
             href={DISCORD_PREMIUM_CONTACT_URL}
             target="_blank"

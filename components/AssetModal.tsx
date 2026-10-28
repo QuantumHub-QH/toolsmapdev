@@ -22,6 +22,7 @@ interface AssetModalProps {
   asset: Asset | null;
   onClose: () => void;
   isBookmarked: boolean;
+  hasPremiumAccess: boolean;
   onToggleBookmark: (id: string) => void;
   onDownload?: (assetId: string) => void;
 }
@@ -30,6 +31,7 @@ export const AssetModal: React.FC<AssetModalProps> = ({
   asset,
   onClose,
   isBookmarked,
+  hasPremiumAccess,
   onToggleBookmark,
   onDownload,
 }) => {
@@ -134,7 +136,7 @@ export const AssetModal: React.FC<AssetModalProps> = ({
 
             {/* Quick Action Buttons */}
             <div className="space-y-2">
-              {asset.isPremium && (
+              {asset.isPremium && !hasPremiumAccess && (
                 <a
                   href={DISCORD_PREMIUM_CONTACT_URL}
                   target="_blank"
@@ -145,7 +147,7 @@ export const AssetModal: React.FC<AssetModalProps> = ({
                 </a>
               )}
 
-              {!asset.isPremium && asset.robloxAssetId && (
+              {(!asset.isPremium || hasPremiumAccess) && asset.robloxAssetId && (
                 <div className="flex items-center gap-2 rounded-xl border border-border bg-zinc-900/90 p-3">
                   <div className="flex-1 min-w-0">
                     <p className="text-[11px] font-mono text-zinc-500">ROBLOX ASSET ID</p>
@@ -161,7 +163,7 @@ export const AssetModal: React.FC<AssetModalProps> = ({
                 </div>
               )}
 
-              {!asset.isPremium && asset.fileData ? (
+              {(!asset.isPremium || hasPremiumAccess) && asset.fileData ? (
                 <a
                   href={asset.fileData}
                   download={asset.fileName || `${asset.title.toLowerCase().replace(/[^a-z0-9]/g, '_')}.${asset.format === 'RBXM' ? 'rbxm' : 'zip'}`}
@@ -171,7 +173,7 @@ export const AssetModal: React.FC<AssetModalProps> = ({
                   <Download className="h-4 w-4 text-black" />
                   <span>Download File Langsung ({asset.fileName || asset.fileSize})</span>
                 </a>
-              ) : !asset.isPremium && asset.downloadUrl ? (
+              ) : (!asset.isPremium || hasPremiumAccess) && asset.downloadUrl ? (
                 <a
                   href={asset.downloadUrl}
                   target="_blank"
@@ -227,7 +229,7 @@ export const AssetModal: React.FC<AssetModalProps> = ({
               </div>
 
               {/* Code Snippet Box if available */}
-              {!asset.isPremium && asset.luauCode && (
+              {(!asset.isPremium || hasPremiumAccess) && asset.luauCode && (
                 <div className="mt-4">
                   <div className="flex items-center justify-between rounded-t-lg border border-border bg-zinc-900 px-3 py-1.5 text-xs text-zinc-400">
                     <div className="flex items-center gap-1.5 font-mono text-[11px]">

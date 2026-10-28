@@ -12,9 +12,12 @@ import {
   Search,
   Sparkles,
   LogOut,
-  ShieldCheck
+  ShieldCheck,
+  Crown
 } from 'lucide-react';
 import { DiscordUser } from './DiscordAuthModal';
+import { PREMIUM_PLANS } from '@/lib/premium-config';
+import { DISCORD_PREMIUM_CONTACT_URL } from '@/lib/discord';
 
 interface NavbarProps {
   onOpenBookmarks: () => void;
@@ -38,6 +41,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onLogoutDiscord,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [isPremiumPlansOpen, setIsPremiumPlansOpen] = useState(false);
 
   const navItems = [
     { id: 'assets', label: 'Map Assets', icon: Box },
@@ -104,6 +108,15 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsPremiumPlansOpen(true)}
+            aria-label="Beli Premium"
+            className="flex items-center gap-1.5 rounded-xl border border-amber-400/40 bg-amber-400/10 px-2.5 py-2 text-[10px] sm:px-3.5 sm:text-xs font-bold font-mono text-amber-200 transition-colors hover:bg-amber-400/20"
+          >
+            <Crown className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">BUY PREMIUM</span>
+          </button>
+
           {/* Quick Search Shortcut */}
           <button
             onClick={onSearchFocus}
@@ -140,9 +153,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <p className="text-[11px] font-mono font-bold text-white leading-none truncate max-w-[100px]">
                   @{discordUser.username}
                 </p>
-                <span className="text-[9px] font-mono text-emerald-400 flex items-center gap-1">
+                <span className={`text-[9px] font-mono flex items-center gap-1 ${discordUser.isPremium ? 'text-amber-300' : 'text-emerald-400'}`}>
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  Authorized
+                  {discordUser.isPremium ? 'Premium' : 'Authorized'}
                 </span>
               </div>
               <button
@@ -207,6 +220,56 @@ export const Navbar: React.FC<NavbarProps> = ({
               <Sparkles className="h-3.5 w-3.5" />
               <span>Free & Open</span>
             </div>
+          </div>
+        </div>
+      )}
+
+      {isPremiumPlansOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="premium-plans-title"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-amber-400/30 bg-[#101014] p-5 shadow-2xl sm:p-6">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <p className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-amber-300">
+                  <Crown className="h-3.5 w-3.5" /> Premium Membership
+                </p>
+                <h2 id="premium-plans-title" className="mt-1 text-lg font-bold text-white">
+                  Pilih Paket Premium
+                </h2>
+                <p className="mt-1 text-xs text-zinc-400">
+                  Pilih paket untuk menghubungi admin lewat Discord.
+                </p>
+              </div>
+              <button
+                onClick={() => setIsPremiumPlansOpen(false)}
+                className="rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-zinc-400 hover:text-white"
+                aria-label="Tutup pilihan paket Premium"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-2">
+              {PREMIUM_PLANS.map((plan) => (
+                <a
+                  key={plan.duration}
+                  href={DISCORD_PREMIUM_CONTACT_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setIsPremiumPlansOpen(false)}
+                  className="flex items-center justify-between rounded-xl border border-zinc-800 bg-black/40 px-4 py-3 transition-colors hover:border-amber-400/50 hover:bg-amber-400/5"
+                >
+                  <span className="text-sm font-semibold text-white">{plan.label}</span>
+                  <span className="font-mono text-sm font-bold text-amber-300">{plan.price}</span>
+                </a>
+              ))}
+            </div>
+            <p className="mt-4 text-center text-[10px] text-zinc-500">
+              Pembelian dikonfirmasi manual melalui Discord.
+            </p>
           </div>
         </div>
       )}

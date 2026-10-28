@@ -10,6 +10,8 @@ export interface DiscordUser {
   avatarUrl?: string;
   isAuthorized: boolean;
   joinedAt: string;
+  isPremium?: boolean;
+  premiumExpiresAt?: string | null;
 }
 
 interface DiscordAuthModalProps {

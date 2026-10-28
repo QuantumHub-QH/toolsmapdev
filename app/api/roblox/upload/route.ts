@@ -1,34 +1,56 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getDiscordSession } from '@/lib/discord-session';
+import { getPremiumEntitlement } from '@/lib/premium';
+import {
+  DailyUploadLimitError,
+  releaseDailyUpload,
+  reserveDailyUploads,
+} from '@/lib/upload-limits';
+
+export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
+  const session = getDiscordSession(request);
+  if (!session) {
+    return NextResponse.json({ success: false, error: 'Login Discord diperlukan untuk upload.' }, { status: 401 });
+  }
+
+  let reservedDate: string | null = null;
   try {
     const formData = await request.formData();
-    const file = formData.get('file') as File | null;
-    const assetType = formData.get('assetType') as string; // 'Audio' or 'Decal'
-    const displayName = (formData.get('displayName') as string) || (file ? file.name.replace(/\.[^/.]+$/, '') : 'Asset');
-    const description = (formData.get('description') as string) || 'Uploaded via MapDev Hub Bulk Uploader';
-    const apiKey = (formData.get('apiKey') as string)?.trim();
-    const userId = (formData.get('userId') as string)?.trim();
+    const file = formData.get('file');
+    const assetType = formData.get('assetType');
+    const displayName = formData.get('displayName');
+    const description = formData.get('description');
+    const apiKey = formData.get('apiKey');
+    const userId = formData.get('userId');
 
-    if (!file) {
-      return NextResponse.json({ success: false, error: 'File tidak ditemukan' }, { status: 400 });
+    if (!(file instanceof File)) {
+      return NextResponse.json({ success: false, error: 'File tidak ditemukan.' }, { status: 400 });
     }
-    if (!apiKey) {
-      return NextResponse.json({ success: false, error: 'Roblox API Key diperlukan' }, { status: 400 });
+    if (assetType !== 'Audio' && assetType !== 'Decal') {
+      return NextResponse.json({ success: false, error: 'Jenis asset tidak valid.' }, { status: 400 });
     }
-    if (!userId) {
-      return NextResponse.json({ success: false, error: 'Roblox User ID diperlukan' }, { status: 400 });
+    if (typeof apiKey !== 'string' || !apiKey.trim()) {
+      return NextResponse.json({ success: false, error: 'Roblox API Key diperlukan.' }, { status: 400 });
+    }
+    if (typeof userId !== 'string' || !/^\d+$/.test(userId.trim())) {
+      return NextResponse.json({ success: false, error: 'Roblox User ID tidak valid.' }, { status: 400 });
     }
 
-    // Build Open Cloud request payload
+    const entitlement = await getPremiumEntitlement(session.id);
+    if (!entitlement.isPremium) {
+      const reservation = await reserveDailyUploads(session.id);
+      reservedDate = reservation.date;
+    }
+
     const robloxMetadata = {
-      assetType: assetType === 'Audio' ? 'Audio' : 'Decal',
-      displayName: displayName.slice(0, 50),
-      description: description.slice(0, 1000),
+      assetType,
+      displayName: (typeof displayName === 'string' && displayName.trim() ? displayName : file.name.replace(/\.[^/.]+$/, '')).slice(0, 50),
+      description: (typeof description === 'string' ? description : 'Uploaded via MapDev Hub Bulk Uploader').slice(0, 1000),
       creationContext: {
-        creator: {
-          userId: userId,
-        },
+        creator: { userId: userId.trim() },
       },
     };
 
@@ -36,47 +58,67 @@ export async function POST(request: NextRequest) {
     robloxFormData.append('request', JSON.stringify(robloxMetadata));
     robloxFormData.append('fileContent', file, file.name);
 
-    const robloxRes = await fetch('https://apis.roblox.com/assets/v1/assets', {
+    const robloxResponse = await fetch('https://apis.roblox.com/assets/v1/assets', {
       method: 'POST',
-      headers: {
-        'x-api-key': apiKey,
-      },
+      headers: { 'x-api-key': apiKey.trim() },
       body: robloxFormData,
     });
 
-    const responseText = await robloxRes.text();
-    let responseJson: any = null;
+    const responseText = await robloxResponse.text();
+    let responseJson: Record<string, unknown> | null = null;
     try {
       responseJson = JSON.parse(responseText);
     } catch {
-      // not JSON
+      responseJson = null;
     }
 
-    if (!robloxRes.ok) {
-      const errorMsg = responseJson?.message || responseJson?.error || responseText || `Roblox API error: ${robloxRes.status}`;
+    if (!robloxResponse.ok) {
+      await releaseReservation(session.id, reservedDate);
+      reservedDate = null;
+      const errorData = responseJson as { message?: string; error?: string } | null;
+      const errorMessage = errorData?.message || errorData?.error || responseText || `Roblox API error: ${robloxResponse.status}`;
       return NextResponse.json({
         success: false,
-        error: errorMsg,
-        status: robloxRes.status,
-      }, { status: robloxRes.status >= 500 ? 502 : 400 });
+        error: errorMessage,
+        status: robloxResponse.status,
+      }, { status: robloxResponse.status >= 500 ? 502 : 400 });
     }
 
-    // Extract assetId or operation path
-    const assetId = responseJson?.response?.assetId || responseJson?.assetId || responseJson?.path?.split('/')?.pop();
+    const responseData = responseJson as {
+      response?: { assetId?: string };
+      assetId?: string;
+      path?: string;
+    } | null;
+    const assetId = responseData?.response?.assetId || responseData?.assetId || responseData?.path?.split('/').pop();
 
     return NextResponse.json({
       success: true,
       assetId: assetId || 'Pending',
       data: responseJson,
       fileName: file.name,
-      displayName: displayName,
-      assetType: assetType,
+      displayName: robloxMetadata.displayName,
+      assetType,
+      unlimited: entitlement.isPremium,
     });
-  } catch (err: any) {
-    console.error('Roblox upload handler error:', err);
+  } catch (error) {
+    await releaseReservation(session.id, reservedDate);
+    if (error instanceof DailyUploadLimitError) {
+      return NextResponse.json({ success: false, error: error.message }, { status: 429 });
+    }
+
+    console.error('Roblox upload handler error:', error);
     return NextResponse.json({
       success: false,
-      error: err.message || 'Gagal memproses upload ke Roblox',
-    }, { status: 500 });
+      error: error instanceof Error ? error.message : 'Gagal memproses upload ke Roblox.',
+    }, { status: 503 });
+  }
+}
+
+async function releaseReservation(discordId: string, date: string | null): Promise<void> {
+  if (!date) return;
+  try {
+    await releaseDailyUpload(discordId, date);
+  } catch (error) {
+    console.error('Failed to release upload quota reservation:', error);
   }
 }
