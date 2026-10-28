@@ -37,7 +37,7 @@ interface PremiumUserEntry {
 
 const MAX_PUBLISH_REQUEST_BYTES = 4 * 1024 * 1024;
 const MAX_DIRECT_MAP_FILE_BYTES = 2.5 * 1024 * 1024;
-const PUBLISH_REQUEST_TIMEOUT_MS = 35_000;
+const PUBLISH_REQUEST_TIMEOUT_MS = 65_000;
 
 function createPublishBatches(products: Asset[]): Asset[][] {
   const batches: Asset[][] = [];
@@ -341,13 +341,25 @@ export default function AdminPanelPage() {
 
       // 2. Fetch live data from backend & GitHub
       let cleanServerData: Asset[] = [];
-      try {
-        const res = await fetch('/api/admin-panel/products?t=' + Date.now(), { cache: 'no-store' });
+      let offset = 0;
+      let expectedCount: number | null = null;
+
+      do {
+        const res = await fetch(`/api/admin-panel/products?offset=${offset}&t=${Date.now()}`, { cache: 'no-store' });
         const data = await res.json();
-        if (data.success && Array.isArray(data.data)) {
-          cleanServerData = data.data.filter((p: Asset) => !deletedIds.includes(p.id));
+        if (!res.ok || !data.success || !Array.isArray(data.data)) {
+          throw new Error(data.error || `Gagal memuat katalog (HTTP ${res.status}).`);
         }
-      } catch (e) {}
+
+        cleanServerData.push(...data.data.filter((p: Asset) => !deletedIds.includes(p.id)));
+        expectedCount = typeof data.count === 'number' ? data.count : null;
+
+        if (typeof data.nextOffset !== 'number') break;
+        if (data.nextOffset <= offset && data.nextOffset < (expectedCount ?? 0)) {
+          throw new Error('Pagination katalog tidak maju; pemuatan dihentikan.');
+        }
+        offset = data.nextOffset;
+      } while (expectedCount !== null && offset < expectedCount);
 
 
       const liveIds = new Set(cleanServerData.map((p) => p.id));

@@ -1,7 +1,7 @@
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 export const fetchCache = 'force-no-store';
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
@@ -14,6 +14,7 @@ import { verifyAdminSession } from '@/lib/security';
 import { sanitizePublicAsset } from '@/lib/assets';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
+const ADMIN_PRODUCTS_PAGE_BYTES = 4 * 1024 * 1024;
 
 // Helper to read products
 async function getProducts(): Promise<Asset[]> {
@@ -94,10 +95,38 @@ export async function GET(request: NextRequest) {
 
   try {
     const products = await getProducts();
+    const offsetValue = Number(new URL(request.url).searchParams.get('offset') || 0);
+    const offset = Number.isSafeInteger(offsetValue) && offsetValue > 0 ? offsetValue : 0;
+    const page: Asset[] = [];
+
+    for (let index = offset; index < products.length; index += 1) {
+      const candidate = [...page, products[index]];
+      const body = {
+        success: true,
+        data: candidate,
+        count: products.length,
+        offset,
+        nextOffset: offset + candidate.length,
+        timestamp: Date.now(),
+      };
+
+      if (Buffer.byteLength(JSON.stringify(body)) > ADMIN_PRODUCTS_PAGE_BYTES && page.length > 0) break;
+      if (Buffer.byteLength(JSON.stringify(body)) > ADMIN_PRODUCTS_PAGE_BYTES) {
+        return NextResponse.json({
+          success: false,
+          error: `Produk "${products[index].title}" terlalu besar untuk dimuat dari Admin Panel.`,
+        }, { status: 413 });
+      }
+
+      page.push(products[index]);
+    }
+
     return NextResponse.json({
       success: true,
-      data: products,
+      data: page,
       count: products.length,
+      offset,
+      nextOffset: offset + page.length,
       timestamp: Date.now(),
     }, {
       headers: { 'Cache-Control': 'private, no-store' },
@@ -157,7 +186,7 @@ export async function POST(request: NextRequest) {
 
       if (!syncRes.success) {
         return NextResponse.json(
-          { success: false, error: syncRes.message, data: mergedProducts },
+          { success: false, error: syncRes.message },
           { status: 400 }
         );
       }
@@ -165,7 +194,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         success: true,
         message: `Berhasil sinkronisasi ${bulkList.length} produk ke publik!`,
-        data: mergedProducts,
         syncedWithGitHub: syncRes.success,
       });
     }
@@ -259,7 +287,6 @@ export async function POST(request: NextRequest) {
         {
           success: false,
           error: `Gagal menyimpan ke GitHub: ${syncRes.message}`,
-          data: finalList,
         },
         { status: 400 }
       );
@@ -268,7 +295,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       message: syncRes.message || 'Produk berhasil di-publish ke publik!',
-      data: finalList,
       syncedWithGitHub: syncRes.success,
     });
   } catch (err: any) {
@@ -325,7 +351,6 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({
       success: true,
       message: 'Produk berhasil dihapus permanen dari Cloud & GitHub!',
-      data: updatedList,
       syncedWithGitHub: syncRes.success,
     });
   } catch (err: any) {

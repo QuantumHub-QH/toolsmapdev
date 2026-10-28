@@ -50,6 +50,8 @@ interface UploadQueueItem {
   previewUrl: string;
   status: 'pending' | 'processing' | 'uploading' | 'success' | 'error';
   assetId?: string;
+  operationId?: string;
+  moderationState?: string;
   errorMessage?: string;
   speed: number;
   pitch: number;
@@ -162,17 +164,58 @@ async function processAudioFile(
 async function readUploadResponse(response: Response): Promise<{
   success?: boolean;
   assetId?: string;
+  operationId?: string;
+  moderationState?: string;
+  done?: boolean;
   error?: string;
 }> {
   const responseText = await response.text();
   try {
-    return JSON.parse(responseText) as { success?: boolean; assetId?: string; error?: string };
+    return JSON.parse(responseText) as {
+      success?: boolean;
+      assetId?: string;
+      operationId?: string;
+      moderationState?: string;
+      done?: boolean;
+      error?: string;
+    };
   } catch {
     if (response.status === 413 || /request entity too large/i.test(responseText)) {
       throw new Error('Ukuran upload melewati batas server. Audio diproses otomatis; coba potong durasi atau naikkan Speed.');
     }
     throw new Error(responseText.trim().slice(0, 250) || `Server mengembalikan respons tidak valid (HTTP ${response.status}).`);
   }
+}
+
+async function waitForRobloxOperation(
+  operationId: string,
+  apiKey: string,
+  onPending: () => void
+): Promise<{ assetId?: string; moderationState?: string; error?: string; done?: boolean }> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const response = await fetch('/api/roblox/upload/status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operationId, apiKey }),
+      cache: 'no-store',
+    });
+    const result = await readUploadResponse(response);
+
+    if (!response.ok || !result.success) {
+      return {
+        error: result.error || `Gagal memeriksa status upload (HTTP ${response.status}).`,
+        done: result.done,
+      };
+    }
+    if (result.assetId) {
+      return { assetId: result.assetId, moderationState: result.moderationState };
+    }
+
+    onPending();
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+
+  return { error: 'Roblox masih memproses upload. Tekan Upload lagi untuk memeriksa status; file tidak akan dikirim ulang.' };
 }
 
 export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
@@ -617,17 +660,21 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
       return;
     }
 
-    if (!dailyQuota.unlimited && dailyQuota.remaining <= 0) {
-      alert('Kuota upload kamu hari ini sudah habis (10/10). Tunggu reset esok hari jam 00:00!');
-      return;
-    }
-
     const currentQueue = type === 'audio' ? audioQueue : imageQueue;
-    const pendingItems = currentQueue.filter((item) => item.status === 'pending' || item.status === 'error');
+    let pendingItems = currentQueue.filter((item) => item.status === 'pending' || item.status === 'error');
 
     if (pendingItems.length === 0) {
       alert('Tidak ada file baru untuk di-upload.');
       return;
+    }
+
+    const hasNewUploads = pendingItems.some((item) => !item.operationId && !item.assetId);
+    if (hasNewUploads && !dailyQuota.unlimited && dailyQuota.remaining <= 0) {
+      pendingItems = pendingItems.filter((item) => item.operationId || item.assetId);
+      if (pendingItems.length === 0) {
+        alert('Kuota upload kamu hari ini sudah habis (10/10). Tunggu reset esok hari jam 00:00!');
+        return;
+      }
     }
 
     setIsUploading(true);
@@ -646,64 +693,107 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
       );
 
       try {
-        let fileToUpload = item.file;
+        let fileToUpload = item.processedFile || item.file;
 
-        if (
-          type === 'audio'
-          && (audioSpeed !== 1.0 || audioVolume !== 100 || item.file.size > MAX_PROCESSED_AUDIO_BYTES)
-        ) {
-          fileToUpload = await processAudioFile(
-            item.file,
-            audioSpeed,
-            audioVolume,
-            item.file.size > MAX_PROCESSED_AUDIO_BYTES
-          );
-        }
+        if (!item.operationId && !item.assetId) {
+          if (
+            type === 'audio'
+            && (audioSpeed !== 1.0 || audioVolume !== 100 || item.file.size > MAX_PROCESSED_AUDIO_BYTES)
+          ) {
+            fileToUpload = await processAudioFile(
+              item.file,
+              audioSpeed,
+              audioVolume,
+              item.file.size > MAX_PROCESSED_AUDIO_BYTES
+            );
+          }
 
-        if (fileToUpload.size > MAX_UPLOAD_REQUEST_BYTES) {
-          throw new Error('File upload melebihi 4 MB. Potong durasi audio atau gunakan file yang lebih kecil.');
+          if (fileToUpload.size > MAX_UPLOAD_REQUEST_BYTES) {
+            throw new Error('File upload melebihi 4 MB. Potong durasi audio atau gunakan file yang lebih kecil.');
+          }
         }
 
         setQueue((prev) =>
           prev.map((q) => (q.id === item.id ? { ...q, status: 'uploading' } : q))
         );
 
-        const formData = new FormData();
-        formData.append('file', fileToUpload);
-        formData.append('assetType', type === 'audio' ? 'Audio' : 'Decal');
-        formData.append('displayName', item.name.replace(/\.[^/.]+$/, ''));
-        formData.append('apiKey', robloxSession.apiKey);
-        formData.append('userId', robloxSession.userId);
+        let assetId = item.assetId;
+        let operationId = item.operationId;
+        let moderationState = item.moderationState;
 
-        const res = await fetch('/api/roblox/upload', {
-          method: 'POST',
-          body: formData,
-        });
+        if (!operationId && !assetId) {
+          const formData = new FormData();
+          formData.append('file', fileToUpload);
+          formData.append('assetType', type === 'audio' ? 'Audio' : 'Decal');
+          formData.append('displayName', item.name.replace(/\.[^/.]+$/, ''));
+          formData.append('apiKey', robloxSession.apiKey);
+          formData.append('userId', robloxSession.userId);
 
-        const result = await readUploadResponse(res);
+          const response = await fetch('/api/roblox/upload', {
+            method: 'POST',
+            body: formData,
+          });
+          const result = await readUploadResponse(response);
 
-        if (res.ok && result.success && result.assetId) {
-          successfulUploadsCount++;
-          setQueue((prev) =>
-            prev.map((q) =>
-              q.id === item.id
-                ? { ...q, status: 'success', assetId: String(result.assetId) }
-                : q
-            )
+          if (!response.ok || !result.success) {
+            throw new Error(result.error || `Upload ditolak (HTTP ${response.status}).`);
+          }
+
+          assetId = result.assetId;
+          operationId = result.operationId;
+          moderationState = result.moderationState;
+          if (operationId) {
+            setQueue((prev) => prev.map((queueItem) => (
+              queueItem.id === item.id
+                ? { ...queueItem, status: 'processing', operationId }
+                : queueItem
+            )));
+          }
+        }
+
+        if (!assetId && operationId) {
+          const operationResult = await waitForRobloxOperation(
+            operationId,
+            robloxSession.apiKey,
+            () => setQueue((prev) => prev.map((queueItem) => (
+              queueItem.id === item.id ? { ...queueItem, status: 'processing', operationId } : queueItem
+            )))
           );
+          if (operationResult.error) {
+            setQueue((prev) => prev.map((queueItem) => (
+              queueItem.id === item.id
+                ? {
+                    ...queueItem,
+                    status: 'error',
+                    operationId: operationResult.done ? undefined : operationId,
+                    errorMessage: operationResult.error,
+                  }
+                : queueItem
+            )));
+            continue;
+          }
+          assetId = operationResult.assetId;
+          moderationState = operationResult.moderationState;
+        }
 
-        } else {
+        if (assetId) {
+          successfulUploadsCount++;
           setQueue((prev) =>
             prev.map((q) =>
               q.id === item.id
                 ? {
                     ...q,
-                    status: 'error',
-                    errorMessage: result.error || 'Gagal mengupload ke Roblox',
+                    status: 'success',
+                    assetId: String(assetId),
+                    operationId: undefined,
+                    moderationState,
+                    errorMessage: undefined,
                   }
                 : q
             )
           );
+        } else {
+          throw new Error('Upload tidak menghasilkan Asset ID Roblox.');
         }
       } catch (err: any) {
         setQueue((prev) =>
@@ -1464,7 +1554,7 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => handleStartBulkUpload('audio')}
-                      disabled={isUploading || !robloxSession || !discordUser || (!dailyQuota.unlimited && dailyQuota.remaining <= 0)}
+                      disabled={isUploading || !robloxSession || !discordUser || (!dailyQuota.unlimited && dailyQuota.remaining <= 0 && !audioQueue.some((item) => item.status === 'error' && item.operationId))}
                       className="flex items-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-500 px-4 py-2 text-xs font-mono font-bold text-white transition-all shadow-md active:scale-95 disabled:opacity-50"
                     >
                       <Upload className={`h-3.5 w-3.5 ${isUploading ? 'animate-bounce' : ''}`} />
@@ -1569,6 +1659,11 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                             <span className="text-emerald-400 text-[11px] font-bold">
                               ID: {item.assetId}
                             </span>
+                            {item.moderationState && item.moderationState !== 'MODERATION_STATE_APPROVED' && (
+                              <span className="text-amber-400 text-[10px]">
+                                Roblox moderation: {item.moderationState.replace('MODERATION_STATE_', '').toLowerCase()}
+                              </span>
+                            )}
                             <button
                               onClick={() => handleCopyAssetId(item.assetId!)}
                               className="text-[10px] bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-2 py-0.5 rounded flex items-center gap-1"
@@ -1649,7 +1744,7 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => handleStartBulkUpload('image')}
-                      disabled={isUploading || !robloxSession || !discordUser || (!dailyQuota.unlimited && dailyQuota.remaining <= 0)}
+                      disabled={isUploading || !robloxSession || !discordUser || (!dailyQuota.unlimited && dailyQuota.remaining <= 0 && !imageQueue.some((item) => item.status === 'error' && item.operationId))}
                       className="flex items-center gap-2 rounded-lg bg-purple-600 hover:bg-purple-500 px-4 py-2 text-xs font-mono font-bold text-white transition-all shadow-md active:scale-95 disabled:opacity-50"
                     >
                       <Upload className={`h-3.5 w-3.5 ${isUploading ? 'animate-bounce' : ''}`} />
@@ -1744,6 +1839,11 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                             <span className="text-emerald-400 text-[10px] font-bold block truncate">
                               ID: {item.assetId}
                             </span>
+                            {item.moderationState && item.moderationState !== 'MODERATION_STATE_APPROVED' && (
+                              <span className="text-amber-400 text-[9px] block truncate" title={item.moderationState}>
+                                Moderation: {item.moderationState.replace('MODERATION_STATE_', '').toLowerCase()}
+                              </span>
+                            )}
                             <button
                               onClick={() => handleCopyAssetId(item.assetId!)}
                               className="w-full text-[10px] bg-zinc-800 hover:bg-zinc-700 text-zinc-300 py-0.5 rounded flex items-center justify-center gap-1"

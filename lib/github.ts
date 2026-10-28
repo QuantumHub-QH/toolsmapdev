@@ -18,7 +18,7 @@ export function getGitHubToken(): string {
 async function fetchWithTimeout(
   input: string,
   init: RequestInit,
-  timeoutMs = 8_000
+  timeoutMs = 15_000
 ): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -135,7 +135,7 @@ export async function commitProductsToGitHub(
         sha,
         branch: 'main',
       }),
-    });
+    }, 25_000);
 
     if (putRes.ok) {
       return {

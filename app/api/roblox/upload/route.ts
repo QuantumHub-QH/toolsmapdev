@@ -85,16 +85,26 @@ export async function POST(request: NextRequest) {
     }
 
     const responseData = responseJson as {
-      response?: { assetId?: string };
+      response?: { assetId?: string; moderationResult?: { moderationState?: string } };
       assetId?: string;
       path?: string;
     } | null;
-    const assetId = responseData?.response?.assetId || responseData?.assetId || responseData?.path?.split('/').pop();
+    const assetId = responseData?.response?.assetId || responseData?.assetId;
+    const operationId = responseData?.path?.match(/^operations\/[A-Za-z0-9_-]+$/)?.[0];
+
+    if (!assetId && !operationId) {
+      await releaseReservation(session.id, reservedDate);
+      reservedDate = null;
+      return NextResponse.json({
+        success: false,
+        error: 'Roblox menerima respons yang tidak berisi Asset ID atau operation ID.',
+      }, { status: 502 });
+    }
 
     return NextResponse.json({
       success: true,
-      assetId: assetId || 'Pending',
-      data: responseJson,
+      ...(assetId ? { assetId } : { operationId }),
+      moderationState: responseData?.response?.moderationResult?.moderationState,
       fileName: file.name,
       displayName: robloxMetadata.displayName,
       assetType,
