@@ -116,7 +116,7 @@ export async function commitProductsToGitHub(
       const err = ((await getRes.json().catch(() => ({}))) as any) || {};
       return {
         success: false,
-        message: err.message || `Gagal membaca katalog GitHub (HTTP ${getRes.status}).`,
+        message: getGitHubAccessError(err.message, getRes.status),
         status: getRes.status,
       };
     }
@@ -147,7 +147,7 @@ export async function commitProductsToGitHub(
     const err = ((await putRes.json().catch(() => ({}))) as any) || {};
     return {
       success: false,
-      message: err.message || putRes.statusText,
+      message: getGitHubAccessError(err.message || putRes.statusText, putRes.status),
       status: putRes.status,
     };
   }
@@ -169,6 +169,19 @@ export async function commitProductsToGitHub(
       message: err.message || 'Gagal terhubung ke GitHub API',
     };
   }
+}
+
+function getGitHubAccessError(message: string, status: number): string {
+  if (status === 401) {
+    return `GitHub menolak GITHUB_TOKEN (HTTP 401). Periksa token di environment Vercel dan pastikan belum kedaluwarsa.`;
+  }
+  if (status === 403) {
+    return `GitHub menolak akses tulis (HTTP 403). Untuk repo private, GITHUB_TOKEN harus punya izin Contents: Read and write. ${message}`;
+  }
+  if (status === 404) {
+    return `Repository atau file katalog tidak bisa diakses (HTTP 404). Untuk repo private, pastikan GITHUB_TOKEN punya akses ke repository QuantumHub-QH/mchlern dan izin Contents: Read and write.`;
+  }
+  return `${message} (HTTP ${status})`;
 }
 
 /**

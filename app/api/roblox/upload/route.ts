@@ -75,8 +75,16 @@ export async function POST(request: NextRequest) {
     if (!robloxResponse.ok) {
       await releaseReservation(session.id, reservedDate);
       reservedDate = null;
-      const errorData = responseJson as { message?: string; error?: string } | null;
-      const errorMessage = errorData?.message || errorData?.error || responseText || `Roblox API error: ${robloxResponse.status}`;
+      const errorData = responseJson as {
+        message?: string;
+        error?: string;
+        errors?: Array<{ message?: string; code?: number | string }>;
+      } | null;
+      const apiErrors = errorData?.errors
+        ?.map((item) => item.message)
+        .filter((message): message is string => Boolean(message))
+        .join('; ');
+      const errorMessage = apiErrors || errorData?.message || errorData?.error || `Roblox API error: HTTP ${robloxResponse.status}`;
       return NextResponse.json({
         success: false,
         error: errorMessage,

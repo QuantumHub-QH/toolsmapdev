@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
     if (!OPERATION_ID_PATTERN.test(operationId)) {
       return NextResponse.json({ success: false, error: 'Operation ID Roblox tidak valid.' }, { status: 400 });
     }
-    if (!apiKey || apiKey.length > 256) {
+    if (!apiKey || apiKey.length > 4096) {
       return NextResponse.json({ success: false, error: 'Roblox API Key tidak valid.' }, { status: 400 });
     }
 
@@ -37,6 +37,7 @@ export async function POST(request: NextRequest) {
       done?: boolean;
       response?: { assetId?: string; moderationResult?: { moderationState?: string } };
       error?: { message?: string; code?: string };
+      errors?: Array<{ message?: string; code?: number | string }>;
     };
 
     try {
@@ -50,9 +51,13 @@ export async function POST(request: NextRequest) {
     }
 
     if (!response.ok) {
+      const errorMessage = result.errors
+        ?.map((item) => item.message)
+        .filter((message): message is string => Boolean(message))
+        .join('; ');
       return NextResponse.json({
         success: false,
-        error: result.error?.message || `Gagal memeriksa status Roblox (HTTP ${response.status}).`,
+        error: errorMessage || result.error?.message || `Gagal memeriksa status Roblox (HTTP ${response.status}).`,
       }, { status: response.status >= 500 ? 502 : 400 });
     }
 
