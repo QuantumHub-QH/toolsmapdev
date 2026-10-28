@@ -61,6 +61,9 @@ interface DevToolsSectionProps {
   onOpenDiscordAuth: () => void;
 }
 
+const MAX_UPLOAD_REQUEST_BYTES = 4 * 1024 * 1024;
+const MAX_PROCESSED_AUDIO_BYTES = 3_900_000;
+
 // Convert AudioBuffer to 16-bit PCM WAV Blob
 function audioBufferToWav(buffer: AudioBuffer): Blob {
   const numOfChan = buffer.numberOfChannels;
@@ -108,40 +111,67 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
 }
 
 // Process audio with Speed & Volume using OfflineAudioContext
-async function processAudioFile(file: File, speed: number, volume: number): Promise<File> {
-  if (speed === 1.0 && volume === 100) return file;
+async function processAudioFile(
+  file: File,
+  speed: number,
+  volume: number,
+  forceCompress = false
+): Promise<File> {
+  if (speed === 1.0 && volume === 100 && !forceCompress) return file;
 
+  let audioCtx: AudioContext | null = null;
   try {
     const arrayBuffer = await file.arrayBuffer();
-    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    audioCtx = new AudioContext();
     const decodedBuffer = await audioCtx.decodeAudioData(arrayBuffer);
 
-    const targetLength = Math.max(1, Math.floor(decodedBuffer.length / speed));
-    const offlineCtx = new OfflineAudioContext(
-      decodedBuffer.numberOfChannels,
-      targetLength,
-      decodedBuffer.sampleRate
-    );
+    async function renderAudio(sampleRate: number): Promise<Blob> {
+      const targetLength = Math.max(1, Math.floor((decodedBuffer.duration / speed) * sampleRate));
+      const offlineCtx = new OfflineAudioContext(1, targetLength, sampleRate);
+      const source = offlineCtx.createBufferSource();
+      source.buffer = decodedBuffer;
+      source.playbackRate.value = speed;
 
-    const source = offlineCtx.createBufferSource();
-    source.buffer = decodedBuffer;
-    source.playbackRate.value = speed;
+      const gainNode = offlineCtx.createGain();
+      gainNode.gain.value = volume / 100;
+      source.connect(gainNode);
+      gainNode.connect(offlineCtx.destination);
+      source.start(0);
+      return audioBufferToWav(await offlineCtx.startRendering());
+    }
 
-    const gainNode = offlineCtx.createGain();
-    gainNode.gain.value = volume / 100;
-
-    source.connect(gainNode);
-    gainNode.connect(offlineCtx.destination);
-
-    source.start(0);
-    const renderedBuffer = await offlineCtx.startRendering();
-    const wavBlob = audioBufferToWav(renderedBuffer);
+    let wavBlob = await renderAudio(16_000);
+    if (wavBlob.size > MAX_PROCESSED_AUDIO_BYTES) {
+      wavBlob = await renderAudio(8_000);
+    }
+    if (wavBlob.size > MAX_PROCESSED_AUDIO_BYTES) {
+      throw new Error('Audio hasil proses masih terlalu besar. Potong durasi audio atau naikkan Speed sebelum upload.');
+    }
 
     const newFileName = `${file.name.replace(/\.[^/.]+$/, '')}_speed_${speed}x.wav`;
     return new File([wavBlob], newFileName, { type: 'audio/wav' });
   } catch (e) {
-    console.error('Audio processing fallback to original:', e);
-    return file;
+    if (e instanceof Error && e.message.startsWith('Audio hasil proses')) throw e;
+    console.error('Audio processing failed:', e);
+    throw new Error('Audio gagal diproses di browser. Coba format MP3/WAV lain atau upload file aslinya dengan Speed 1x.');
+  } finally {
+    await audioCtx?.close();
+  }
+}
+
+async function readUploadResponse(response: Response): Promise<{
+  success?: boolean;
+  assetId?: string;
+  error?: string;
+}> {
+  const responseText = await response.text();
+  try {
+    return JSON.parse(responseText) as { success?: boolean; assetId?: string; error?: string };
+  } catch {
+    if (response.status === 413 || /request entity too large/i.test(responseText)) {
+      throw new Error('Ukuran upload melewati batas server. Audio diproses otomatis; coba potong durasi atau naikkan Speed.');
+    }
+    throw new Error(responseText.trim().slice(0, 250) || `Server mengembalikan respons tidak valid (HTTP ${response.status}).`);
   }
 }
 
@@ -618,9 +648,20 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
       try {
         let fileToUpload = item.file;
 
-        // Process audio with Speed & Volume if audio type
-        if (type === 'audio' && (audioSpeed !== 1.0 || audioVolume !== 100)) {
-          fileToUpload = await processAudioFile(item.file, audioSpeed, audioVolume);
+        if (
+          type === 'audio'
+          && (audioSpeed !== 1.0 || audioVolume !== 100 || item.file.size > MAX_PROCESSED_AUDIO_BYTES)
+        ) {
+          fileToUpload = await processAudioFile(
+            item.file,
+            audioSpeed,
+            audioVolume,
+            item.file.size > MAX_PROCESSED_AUDIO_BYTES
+          );
+        }
+
+        if (fileToUpload.size > MAX_UPLOAD_REQUEST_BYTES) {
+          throw new Error('File upload melebihi 4 MB. Potong durasi audio atau gunakan file yang lebih kecil.');
         }
 
         setQueue((prev) =>
@@ -639,7 +680,7 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
           body: formData,
         });
 
-        const result = await res.json();
+        const result = await readUploadResponse(res);
 
         if (res.ok && result.success && result.assetId) {
           successfulUploadsCount++;

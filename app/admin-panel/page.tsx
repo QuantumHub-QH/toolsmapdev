@@ -35,7 +35,8 @@ interface PremiumUserEntry {
   expiresAt: string;
 }
 
-const MAX_PUBLISH_REQUEST_BYTES = 3 * 1024 * 1024;
+const MAX_PUBLISH_REQUEST_BYTES = 4 * 1024 * 1024;
+const MAX_DIRECT_MAP_FILE_BYTES = 2.5 * 1024 * 1024;
 const PUBLISH_REQUEST_TIMEOUT_MS = 35_000;
 
 function createPublishBatches(products: Asset[]): Asset[][] {
@@ -93,7 +94,15 @@ async function publishRequest(
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
-    const data: { success?: boolean; error?: string } = await response.json().catch(() => ({}));
+    const responseText = await response.text();
+    let data: { success?: boolean; error?: string } = {};
+    try {
+      data = JSON.parse(responseText) as { success?: boolean; error?: string };
+    } catch {
+      if (response.status === 413 || /request entity too large/i.test(responseText)) {
+        throw new Error('Data produk melampaui batas request Vercel 4 MB. Kecilkan gambar/file atau gunakan URL eksternal.');
+      }
+    }
     if (!response.ok || !data.success) {
       throw new Error(data.error || `Server menolak publish (HTTP ${response.status}).`);
     }
@@ -400,8 +409,8 @@ export default function AdminPanelPage() {
   const handleMapFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-        alert('Ukuran file map langsung maksimal 2MB agar data Base64 dan gambar tetap di bawah batas request Vercel.\n\nUntuk file yang lebih besar, upload ke penyimpanan file dan masukkan URL-nya di kolom "B. URL Download File Eksternal".');
+      if (file.size > MAX_DIRECT_MAP_FILE_BYTES) {
+        alert('Ukuran file map langsung maksimal 2,5 MB agar data Base64 dan gambar tetap di bawah batas request Vercel.\n\nUntuk file yang lebih besar, upload ke penyimpanan file dan masukkan URL-nya di kolom "B. URL Download File Eksternal".');
         return;
       }
       setUploadedFileName(file.name);
@@ -509,7 +518,7 @@ export default function AdminPanelPage() {
       setSyncing(false);
       setStatusMessage({
         type: 'error',
-        text: 'Data produk terlalu besar untuk dikirim ke Vercel. Gunakan URL eksternal untuk file map atau gambar, lalu coba lagi.',
+        text: 'Data produk melewati batas 4 MB. Kecilkan gambar/file atau gunakan URL eksternal, lalu coba lagi.',
       });
       return;
     }
@@ -1088,7 +1097,7 @@ export default function AdminPanelPage() {
                       Klik untuk Upload File Map dari Laptop/HP
                     </p>
                     <p className="text-[10px] text-zinc-400 mt-1">
-                      Format: <strong>.rbxm, .rbxl, .zip, .rar, .obj</strong> (Max 2MB Direct Upload)
+                      Format: <strong>.rbxm, .rbxl, .zip, .rar, .obj</strong> (Maks. 2,5 MB Direct Upload)
                     </p>
                   </label>
                 </div>
