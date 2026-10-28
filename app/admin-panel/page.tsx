@@ -28,11 +28,6 @@ import { Asset, AssetCategory, AssetFormat } from '@/types';
 const MAX_PUBLISH_REQUEST_BYTES = 3 * 1024 * 1024;
 const PUBLISH_REQUEST_TIMEOUT_MS = 35_000;
 
-interface PremiumUserRecord {
-  discordId: string;
-  expiresAt: number;
-}
-
 function createPublishBatches(products: Asset[]): Asset[][] {
   const batches: Asset[][] = [];
   let batch: Asset[] = [];
@@ -118,10 +113,6 @@ export default function AdminPanelPage() {
   const [products, setProducts] = useState<Asset[]>([]);
   const [liveProductIds, setLiveProductIds] = useState<Set<string>>(new Set());
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [premiumUsers, setPremiumUsers] = useState<PremiumUserRecord[]>([]);
-  const [premiumDiscordId, setPremiumDiscordId] = useState('');
-  const [premiumDurationDays, setPremiumDurationDays] = useState(7);
-  const [isSavingPremiumUser, setIsSavingPremiumUser] = useState(false);
 
   // Form Fields
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -146,13 +137,6 @@ export default function AdminPanelPage() {
   const [tagsInput, setTagsInput] = useState('free, roblox, dev');
   const [isPremiumProduct, setIsPremiumProduct] = useState(false);
 
-  const loadPremiumUsers = async () => {
-    const response = await fetch('/api/admin-panel/premium', { cache: 'no-store' });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'Gagal memuat daftar Premium.');
-    setPremiumUsers(data.users || []);
-  };
-
   // Check login session and clear any legacy browser-stored GitHub credential.
   useEffect(() => {
     localStorage.removeItem('mapdev_github_token');
@@ -160,9 +144,6 @@ export default function AdminPanelPage() {
     if (savedAuth === 'authenticated') {
       setIsAuthenticated(true);
       fetchProducts();
-      loadPremiumUsers().catch((error) => {
-        setStatusMessage({ type: 'error', text: error.message });
-      });
     }
 
     const savedLock = localStorage.getItem('admin_lock_until');
@@ -217,9 +198,6 @@ export default function AdminPanelPage() {
         sessionStorage.setItem('admin_panel_session', data.token || 'authenticated');
         setFailCount(0);
         fetchProducts();
-        loadPremiumUsers().catch((error) => {
-          setStatusMessage({ type: 'error', text: error.message });
-        });
       } else {
         const nextFails = failCount + 1;
         setFailCount(nextFails);
@@ -244,46 +222,6 @@ export default function AdminPanelPage() {
     sessionStorage.removeItem('admin_panel_session');
     setIsAuthenticated(false);
     setPasswordInput('');
-    setPremiumUsers([]);
-  };
-
-  const handleGrantPremium = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setIsSavingPremiumUser(true);
-    try {
-      const response = await fetch('/api/admin-panel/premium', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ discordId: premiumDiscordId, durationDays: premiumDurationDays }),
-      });
-      const data = await response.json();
-      if (!response.ok || !data.success) throw new Error(data.error || 'Gagal menambahkan Premium.');
-      setPremiumDiscordId('');
-      await loadPremiumUsers();
-      setStatusMessage({
-        type: 'success',
-        text: `Discord ID ${data.user.discordId} Premium sampai ${new Date(data.user.expiresAt).toLocaleString('id-ID')}.`,
-      });
-    } catch (error) {
-      setStatusMessage({ type: 'error', text: error instanceof Error ? error.message : 'Gagal menambahkan Premium.' });
-    } finally {
-      setIsSavingPremiumUser(false);
-    }
-  };
-
-  const handleRevokePremium = async (discordId: string) => {
-    if (!confirm(`Cabut akses Premium untuk Discord ID ${discordId}?`)) return;
-    try {
-      const response = await fetch(`/api/admin-panel/premium?discordId=${encodeURIComponent(discordId)}`, {
-        method: 'DELETE',
-      });
-      const data = await response.json();
-      if (!response.ok || !data.success) throw new Error(data.error || 'Gagal mencabut Premium.');
-      await loadPremiumUsers();
-      setStatusMessage({ type: 'success', text: `Premium untuk ${discordId} sudah dicabut.` });
-    } catch (error) {
-      setStatusMessage({ type: 'error', text: error instanceof Error ? error.message : 'Gagal mencabut Premium.' });
-    }
   };
 
   const fetchProducts = async () => {
@@ -841,66 +779,6 @@ export default function AdminPanelPage() {
           Token GitHub disimpan aman di Vercel sebagai environment variable <code>GITHUB_TOKEN</code>; jangan tempelkan token di browser.
         </div>
 
-        <section className="rounded-2xl border border-violet-500/30 bg-[#121217] p-5 space-y-4">
-          <div>
-            <h2 className="text-sm font-bold text-white font-mono uppercase">Kelola Akses Premium Discord</h2>
-            <p className="mt-1 text-xs text-zinc-400">
-              Premium aktif sampai tanggal kedaluwarsa. Firebase Admin dan Storage privat harus dikonfigurasi di Vercel.
-            </p>
-          </div>
-          <form onSubmit={handleGrantPremium} className="grid grid-cols-1 md:grid-cols-[1fr_180px_auto] gap-3">
-            <input
-              value={premiumDiscordId}
-              onChange={(event) => setPremiumDiscordId(event.target.value)}
-              placeholder="Discord User ID"
-              inputMode="numeric"
-              maxLength={20}
-              required
-              className="rounded-lg border border-zinc-700 bg-black px-3 py-2 text-xs font-mono text-white"
-            />
-            <select
-              value={premiumDurationDays}
-              onChange={(event) => setPremiumDurationDays(Number(event.target.value))}
-              className="rounded-lg border border-zinc-700 bg-black px-3 py-2 text-xs text-white"
-            >
-              <option value={7}>7 hari</option>
-              <option value={30}>30 hari</option>
-              <option value={90}>90 hari</option>
-              <option value={365}>1 tahun</option>
-            </select>
-            <button
-              type="submit"
-              disabled={isSavingPremiumUser}
-              className="rounded-lg bg-violet-400 px-4 py-2 text-xs font-bold text-black disabled:opacity-50"
-            >
-              {isSavingPremiumUser ? 'Menyimpan...' : 'Tambah / Perpanjang'}
-            </button>
-          </form>
-          {premiumUsers.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              {premiumUsers.map((user) => (
-                <div key={user.discordId} className="flex items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-black/50 px-3 py-2">
-                  <div className="min-w-0">
-                    <p className="truncate text-xs font-mono text-white">{user.discordId}</p>
-                    <p className="text-[10px] text-zinc-400">
-                      Habis: {new Date(user.expiresAt).toLocaleString('id-ID')}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleRevokePremium(user.discordId)}
-                    className="shrink-0 rounded border border-red-500/30 px-2 py-1 text-[10px] text-red-300 hover:bg-red-500/10"
-                  >
-                    Cabut
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-[11px] text-zinc-500">Belum ada user Premium aktif.</p>
-          )}
-        </section>
-
         {/* 2-Column Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           
@@ -1139,11 +1017,11 @@ export default function AdminPanelPage() {
                   className="w-full rounded-xl border border-zinc-700 bg-black px-3 py-2 text-xs text-white focus:border-white focus:outline-none"
                 >
                   <option value="free">Free — metadata dan aset dapat diakses publik</option>
-                  <option value="premium">Premium — file dan ID disimpan privat</option>
+                  <option value="premium">Premium — tombol ADD PREMIUM mengarah ke Discord</option>
                 </select>
                 {isPremiumProduct && (
                   <p className="mt-1 text-[10px] text-amber-300">
-                    Perlu Firebase Admin di Vercel. File/ID produk ini tidak akan ditampilkan ke user Free.
+                    Download, Roblox ID, dan script tidak ditampilkan di katalog; tombol akan menghubungi Discord.
                   </p>
                 )}
               </div>

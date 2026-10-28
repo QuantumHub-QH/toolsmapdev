@@ -64,14 +64,14 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## 🔒 Discord-Gated Product Catalog
 
-The public website requires a verified Discord login before showing the product catalog. Product API requests, favorites, and download-stat updates also require the server-signed HTTP-only Discord session cookie; product data is not embedded in the homepage bundle or browser storage.
+The public website requires a verified Discord login before showing the product catalog. Product API requests, favorites, and download-stat updates also require the server-signed HTTP-only Discord session cookie; product data is not embedded in the homepage bundle or browser storage. Products marked **Premium** show an **ADD PREMIUM** button linking to the configured Discord contact. Premium access is arranged manually over Discord; the site does not provide premium downloads or entitlement expiry.
 
 To prevent direct access to the catalog outside the website:
 
 1. Change the GitHub repository `QuantumHub-QH/mchlern` to **Private** in GitHub Settings → General → Danger Zone. The Vercel Git integration must retain access to this private repo.
-2. Keep `GITHUB_TOKEN` configured in Vercel, with private-repository **Contents: Read and write** permission. The server uses the authenticated GitHub API to load and publish `data/products.json`; unauthenticated raw GitHub fallback is disabled.
+2. Keep `GITHUB_TOKEN` configured in Vercel, with private-repository **Contents: Read and write** permission. The server uses the authenticated GitHub API to load and publish `data/products.json`; unauthenticated raw GitHub fallback is disabled. Product data is stored in this private repository; the catalog API strips Premium IDs, scripts, file data, and download links before returning product listings.
 3. Keep `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, and `DISCORD_REDIRECT_URI` configured; register the exact callback URL (`https://your-domain/api/auth/discord/callback`) in Discord Developer Portal. The client secret signs the Discord session cookie.
-4. Publish [`firestore.rules`](./firestore.rules) to Cloud Firestore so browser clients cannot read the fallback `products` collection directly.
+4. Publish [`firestore.rules`](./firestore.rules) to Cloud Firestore if Firebase is used, so browser clients cannot read the fallback `products` collection directly.
 5. Keep a strong `ADMIN_PASSWORD` configured in Vercel. Set all variables for the target environment and redeploy after changing them.
 
 The repository is separate from the website's public availability: making the repo private should not make the deployed Vercel site private, provided Vercel retains repository access.

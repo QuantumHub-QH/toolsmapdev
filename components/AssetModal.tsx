@@ -16,15 +16,7 @@ import {
   Share2
 } from 'lucide-react';
 import { Asset } from '@/types';
-
-export interface PremiumAssetDetails {
-  robloxAssetId: string | null;
-  downloadUrl: string | null;
-  luauCode: string | null;
-  fileName: string | null;
-  hasPrivateFile: boolean;
-  premiumExpiresAt: number;
-}
+import { DISCORD_PREMIUM_CONTACT_URL } from '@/lib/discord';
 
 interface AssetModalProps {
   asset: Asset | null;
@@ -32,10 +24,6 @@ interface AssetModalProps {
   isBookmarked: boolean;
   onToggleBookmark: (id: string) => void;
   onDownload?: (assetId: string) => void;
-  isPremiumUser?: boolean;
-  premiumDetails?: PremiumAssetDetails | null;
-  onRequestPremiumAccess?: (assetId: string) => Promise<void>;
-  onPremiumOnly?: () => void;
 }
 
 export const AssetModal: React.FC<AssetModalProps> = ({
@@ -44,15 +32,10 @@ export const AssetModal: React.FC<AssetModalProps> = ({
   isBookmarked,
   onToggleBookmark,
   onDownload,
-  isPremiumUser = false,
-  premiumDetails,
-  onRequestPremiumAccess,
-  onPremiumOnly,
 }) => {
   const [copiedId, setCopiedId] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedShare, setCopiedShare] = useState(false);
-  const [isLoadingPremium, setIsLoadingPremium] = useState(false);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -65,7 +48,7 @@ export const AssetModal: React.FC<AssetModalProps> = ({
   if (!asset) return null;
 
   const handleCopyId = () => {
-    const assetId = premiumDetails?.robloxAssetId || asset.robloxAssetId;
+    const assetId = asset.robloxAssetId;
     if (assetId) {
       navigator.clipboard.writeText(assetId);
       setCopiedId(true);
@@ -74,21 +57,11 @@ export const AssetModal: React.FC<AssetModalProps> = ({
   };
 
   const handleCopyCode = () => {
-    const code = premiumDetails?.luauCode || asset.luauCode;
+    const code = asset.luauCode;
     if (code) {
       navigator.clipboard.writeText(code);
       setCopiedCode(true);
       setTimeout(() => setCopiedCode(false), 2000);
-    }
-  };
-
-  const handleRequestPremiumAccess = async () => {
-    if (!onRequestPremiumAccess) return;
-    setIsLoadingPremium(true);
-    try {
-      await onRequestPremiumAccess(asset.id);
-    } finally {
-      setIsLoadingPremium(false);
     }
   };
 
@@ -161,28 +134,22 @@ export const AssetModal: React.FC<AssetModalProps> = ({
 
             {/* Quick Action Buttons */}
             <div className="space-y-2">
-              {asset.isPremium && !isPremiumUser ? (
-                <button
-                  onClick={onPremiumOnly}
+              {asset.isPremium && (
+                <a
+                  href={DISCORD_PREMIUM_CONTACT_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="flex items-center justify-center gap-2 w-full rounded-xl border border-amber-400/40 bg-amber-400/10 text-amber-100 font-bold py-2.5 px-4 text-xs hover:bg-amber-400/20 transition-colors"
                 >
-                  🔒 PREMIUM ONLY — Hubungi Admin di Discord
-                </button>
-              ) : asset.isPremium && !premiumDetails ? (
-                <button
-                  onClick={handleRequestPremiumAccess}
-                  disabled={isLoadingPremium}
-                  className="flex items-center justify-center gap-2 w-full rounded-xl border border-amber-400/40 bg-amber-400/10 text-amber-100 font-bold py-2.5 px-4 text-xs hover:bg-amber-400/20 disabled:opacity-50 transition-colors"
-                >
-                  {isLoadingPremium ? 'Memeriksa akses...' : 'Buka Akses Aset Premium'}
-                </button>
-              ) : null}
+                  ADD PREMIUM
+                </a>
+              )}
 
-              {(premiumDetails?.robloxAssetId || (!asset.isPremium && asset.robloxAssetId)) && (
+              {!asset.isPremium && asset.robloxAssetId && (
                 <div className="flex items-center gap-2 rounded-xl border border-border bg-zinc-900/90 p-3">
                   <div className="flex-1 min-w-0">
                     <p className="text-[11px] font-mono text-zinc-500">ROBLOX ASSET ID</p>
-                    <p className="font-mono text-sm font-semibold text-white truncate">{premiumDetails?.robloxAssetId || asset.robloxAssetId}</p>
+                    <p className="font-mono text-sm font-semibold text-white truncate">{asset.robloxAssetId}</p>
                   </div>
                   <button
                     onClick={handleCopyId}
@@ -194,27 +161,7 @@ export const AssetModal: React.FC<AssetModalProps> = ({
                 </div>
               )}
 
-              {asset.isPremium && premiumDetails?.hasPrivateFile ? (
-                <a
-                  href={`/api/assets/premium-download?id=${encodeURIComponent(asset.id)}`}
-                  onClick={() => onDownload?.(asset.id)}
-                  className="flex items-center justify-center gap-2 w-full rounded-xl border border-amber-300 bg-amber-300 text-black font-bold py-2.5 px-4 text-xs hover:bg-amber-200 transition-colors"
-                >
-                  <Download className="h-4 w-4" />
-                  <span>Download File Premium ({premiumDetails.fileName || asset.fileSize})</span>
-                </a>
-              ) : asset.isPremium && premiumDetails?.downloadUrl ? (
-                <a
-                  href={premiumDetails.downloadUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={() => onDownload?.(asset.id)}
-                  className="flex items-center justify-center gap-2 w-full rounded-xl border border-amber-300 bg-amber-300 text-black font-bold py-2.5 px-4 text-xs hover:bg-amber-200 transition-colors"
-                >
-                  <Download className="h-4 w-4" />
-                  <span>Download Resource File</span>
-                </a>
-              ) : !asset.isPremium && asset.fileData ? (
+              {!asset.isPremium && asset.fileData ? (
                 <a
                   href={asset.fileData}
                   download={asset.fileName || `${asset.title.toLowerCase().replace(/[^a-z0-9]/g, '_')}.${asset.format === 'RBXM' ? 'rbxm' : 'zip'}`}
@@ -280,7 +227,7 @@ export const AssetModal: React.FC<AssetModalProps> = ({
               </div>
 
               {/* Code Snippet Box if available */}
-              {(premiumDetails?.luauCode || (!asset.isPremium && asset.luauCode)) && (
+              {!asset.isPremium && asset.luauCode && (
                 <div className="mt-4">
                   <div className="flex items-center justify-between rounded-t-lg border border-border bg-zinc-900 px-3 py-1.5 text-xs text-zinc-400">
                     <div className="flex items-center gap-1.5 font-mono text-[11px]">
@@ -296,7 +243,7 @@ export const AssetModal: React.FC<AssetModalProps> = ({
                     </button>
                   </div>
                   <pre className="max-h-48 overflow-y-auto rounded-b-lg border-x border-b border-border bg-black/80 p-3 font-mono text-[11px] text-zinc-300 leading-relaxed">
-                    <code>{premiumDetails?.luauCode || asset.luauCode}</code>
+                    <code>{asset.luauCode}</code>
                   </pre>
                 </div>
               )}

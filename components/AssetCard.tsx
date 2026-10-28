@@ -13,6 +13,7 @@ import {
   Layers
 } from 'lucide-react';
 import { Asset } from '@/types';
+import { DISCORD_PREMIUM_CONTACT_URL } from '@/lib/discord';
 
 interface AssetCardProps {
   asset: Asset;
@@ -20,8 +21,6 @@ interface AssetCardProps {
   isBookmarked: boolean;
   onToggleBookmark: (id: string) => void;
   onDownload?: (assetId: string) => void;
-  isPremiumUser?: boolean;
-  onPremiumOnly?: () => void;
 }
 
 export const AssetCard: React.FC<AssetCardProps> = ({
@@ -30,8 +29,6 @@ export const AssetCard: React.FC<AssetCardProps> = ({
   isBookmarked,
   onToggleBookmark,
   onDownload,
-  isPremiumUser = false,
-  onPremiumOnly,
 }) => {
   const [copied, setCopied] = useState(false);
 
@@ -132,22 +129,17 @@ export const AssetCard: React.FC<AssetCardProps> = ({
       {/* Card Action Footer */}
       <div className="mt-4 pt-3 border-t border-border/80 flex items-center justify-between gap-2">
         {asset.isPremium ? (
-          <button
+          <a
+            href={DISCORD_PREMIUM_CONTACT_URL}
+            target="_blank"
+            rel="noopener noreferrer"
             onClick={(event) => {
               event.stopPropagation();
-              if (!isPremiumUser) onPremiumOnly?.();
-              else onSelect(asset);
             }}
-            className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg border py-1.5 px-2 text-xs font-mono transition-colors ${
-              isPremiumUser
-                ? 'border-amber-400/50 bg-amber-400/10 text-amber-200 hover:bg-amber-400/20'
-                : 'border-amber-400/40 bg-amber-400/10 text-amber-200 hover:bg-amber-400/20'
-            }`}
+            className="flex-1 flex items-center justify-center gap-1.5 rounded-lg border border-amber-400/40 bg-amber-400/10 py-1.5 px-2 text-xs font-mono text-amber-200 transition-colors hover:bg-amber-400/20"
           >
-            <span className="text-[11px] truncate font-medium">
-              {isPremiumUser ? 'Akses Premium' : 'PREMIUM ONLY'}
-            </span>
-          </button>
+            <span className="text-[11px] truncate font-medium">ADD PREMIUM</span>
+          </a>
         ) : asset.fileData ? (
           <a
             href={asset.fileData}

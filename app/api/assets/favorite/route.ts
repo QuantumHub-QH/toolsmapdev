@@ -51,17 +51,16 @@ export async function POST(request: NextRequest) {
       if (item.id === assetId) {
         const currentFavs = item.stats?.favorites || 0;
         const newFavs = action === 'like' ? currentFavs + 1 : Math.max(0, currentFavs - 1);
-        const publicAsset = sanitizePublicAsset({
+        updatedAsset = {
           ...item,
           stats: {
             ...item.stats,
             favorites: newFavs,
           },
-        });
-        updatedAsset = publicAsset;
-        return publicAsset;
+        };
+        return updatedAsset;
       }
-      return sanitizePublicAsset(item);
+      return item;
     });
 
     if (!updatedAsset) {
@@ -83,8 +82,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      asset: updatedAsset,
-    });
+      asset: sanitizePublicAsset(updatedAsset),
+    }, { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }

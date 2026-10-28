@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Navbar } from '@/components/Navbar';
 import { Hero } from '@/components/Hero';
 import { AssetCard } from '@/components/AssetCard';
-import { AssetModal, PremiumAssetDetails } from '@/components/AssetModal';
+import { AssetModal } from '@/components/AssetModal';
 import { DevToolsSection } from '@/components/DevToolsSection';
 import { BookmarksModal } from '@/components/BookmarksModal';
 import { DiscordAuthModal, DiscordUser } from '@/components/DiscordAuthModal';
@@ -32,8 +32,6 @@ export default function Home() {
   const [discordUser, setDiscordUser] = useState<DiscordUser | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [isDiscordModalOpen, setIsDiscordModalOpen] = useState(false);
-  const [isPremiumUser, setIsPremiumUser] = useState(false);
-  const [premiumDetails, setPremiumDetails] = useState<Record<string, PremiumAssetDetails>>({});
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -52,10 +50,9 @@ export default function Home() {
         if (!response.ok) throw new Error('Gagal memverifikasi sesi Discord.');
         return response.json();
       })
-      .then((data: { user?: DiscordUser | null; isPremium?: boolean }) => {
+      .then((data: { user?: DiscordUser | null }) => {
         if (!isMounted) return;
         setDiscordUser(data.user || null);
-        setIsPremiumUser(Boolean(data.isPremium));
       })
       .catch((error) => console.error('Discord session check failed:', error))
       .finally(() => {
@@ -69,28 +66,8 @@ export default function Home() {
 
   const refreshDiscordSession = async () => {
     const response = await fetch('/api/auth/discord/session', { cache: 'no-store' });
-    const data: { user?: DiscordUser | null; isPremium?: boolean } = await response.json();
+    const data: { user?: DiscordUser | null } = await response.json();
     setDiscordUser(data.user || null);
-    setIsPremiumUser(Boolean(data.isPremium));
-  };
-
-  const openPremiumContact = () => {
-    window.open('https://discord.com/users/1309112913331748915', '_blank', 'noopener,noreferrer');
-  };
-
-  const requestPremiumAsset = async (assetId: string) => {
-    try {
-      const response = await fetch('/api/assets/premium-access', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ productId: assetId }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Akses premium ditolak.');
-      setPremiumDetails((current) => ({ ...current, [assetId]: data }));
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : 'Gagal membuka aset premium.');
-    }
   };
 
   // Record visit & fetch live global stats for all users
@@ -394,8 +371,6 @@ export default function Home() {
             console.error('Discord logout failed:', error);
           });
           setDiscordUser(null);
-          setIsPremiumUser(false);
-          setPremiumDetails({});
           showToast('Discord session disconnected');
         }}
       />
@@ -420,7 +395,7 @@ export default function Home() {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
             <div>
               <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight uppercase">
-                {selectedCategory === 'all' ? 'All Free Developer Assets' : `${selectedCategory.replace(/-/g, ' ').toUpperCase()} Assets`}
+                {selectedCategory === 'all' ? '                All Developer Assets' : `${selectedCategory.replace(/-/g, ' ').toUpperCase()} Assets`}
               </h2>
               <p className="text-xs text-zinc-400 mt-1">
                 Showing {filteredAssets.length} verified community resources ready for Roblox Studio.
@@ -490,8 +465,6 @@ export default function Home() {
                   isBookmarked={bookmarkedIds.includes(asset.id)}
                   onToggleBookmark={toggleBookmark}
                   onDownload={handleDownload}
-                  isPremiumUser={isPremiumUser}
-                  onPremiumOnly={openPremiumContact}
                 />
               ))}
             </div>
@@ -513,10 +486,6 @@ export default function Home() {
         isBookmarked={selectedAsset ? bookmarkedIds.includes(selectedAsset.id) : false}
         onToggleBookmark={toggleBookmark}
         onDownload={handleDownload}
-        isPremiumUser={isPremiumUser}
-        premiumDetails={selectedAsset ? premiumDetails[selectedAsset.id] : null}
-        onRequestPremiumAccess={requestPremiumAsset}
-        onPremiumOnly={openPremiumContact}
       />
 
       <BookmarksModal
