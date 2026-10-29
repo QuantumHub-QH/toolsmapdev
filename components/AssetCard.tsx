@@ -149,10 +149,10 @@ export const AssetCard: React.FC<AssetCardProps> = ({
           >
             <span className="text-[11px] truncate font-medium">ADD PREMIUM</span>
           </a>
-        ) : asset.fileData ? (
+        ) : asset.fileData || asset.hasStorageFile ? (
           <a
-            href={asset.fileData}
-            download={asset.fileName || `${asset.title.toLowerCase().replace(/[^a-z0-9]/g, '_')}.${asset.format === 'RBXM' ? 'rbxm' : 'zip'}`}
+            href={asset.hasStorageFile ? `/api/assets/file?id=${encodeURIComponent(asset.id)}` : asset.fileData}
+            download={asset.hasStorageFile ? undefined : asset.fileName || `${asset.title.toLowerCase().replace(/[^a-z0-9]/g, '_')}.${asset.format === 'RBXM' ? 'rbxm' : 'zip'}`}
             onClick={(e) => {
               e.stopPropagation();
               onDownload?.(asset.id);

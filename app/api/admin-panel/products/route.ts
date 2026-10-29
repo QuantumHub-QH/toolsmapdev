@@ -9,9 +9,15 @@ import path from 'path';
 import { Asset } from '@/types';
 import { db } from '@/lib/firebase';
 import { collection, doc, setDoc, deleteDoc, getDocs } from 'firebase/firestore';
-import { fetchProductsFromGitHub, commitProductsToGitHub } from '@/lib/github';
+import { fetchProductsFromGitHub, getGitHubToken, commitProductsToGitHub } from '@/lib/github';
 import { verifyAdminSession } from '@/lib/security';
 import { sanitizePublicAsset } from '@/lib/assets';
+import {
+  deleteProductFile,
+  isProductObjectKeyForId,
+  isValidProductId,
+  migrateInlineProductFile,
+} from '@/lib/product-files';
 
 const DATA_FILE_PATH = path.join(process.cwd(), 'data', 'products.json');
 const ADMIN_PRODUCTS_PAGE_BYTES = 4 * 1024 * 1024;
@@ -19,6 +25,8 @@ const ADMIN_PRODUCTS_PAGE_BYTES = 4 * 1024 * 1024;
 // Helper to read products
 async function getProducts(): Promise<Asset[]> {
   // GitHub is the canonical catalog because it persists across deployments.
+  if (getGitHubToken()) return fetchProductsFromGitHub();
+
   try {
     const ghProducts = await fetchProductsFromGitHub();
     if (ghProducts.length > 0) return ghProducts;
@@ -141,6 +149,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  let newlyUploadedObjectKey: string | undefined;
+  let newlyUploadedProductId: string | undefined;
   try {
     const body = await request.json();
     // Security Check: Block unauthorized mutations
@@ -155,12 +165,44 @@ export async function POST(request: NextRequest) {
     if (body.bulkProducts && Array.isArray(body.bulkProducts)) {
       const bulkList: Asset[] = body.bulkProducts;
       const productMap = new Map<string, Asset>();
+      const uploadedObjectKeys: Array<{ key: string; productId: string }> = [];
+      const cleanupUploadedFiles = async () => {
+        await Promise.all(uploadedObjectKeys.map(async ({ key, productId }) => {
+          try {
+            await deleteProductFile(key, productId);
+          } catch (error) {
+            console.error(`Failed to clean up Supabase Storage object for product ${productId}:`, error);
+          }
+        }));
+      };
+
       for (const product of await getProducts()) {
         if (product?.id) productMap.set(product.id, product);
       }
-      for (const product of bulkList) {
-        if (!product?.id) continue;
-        productMap.set(product.id, product);
+      try {
+        for (const product of bulkList) {
+          if (!product?.id) continue;
+          if (!isValidProductId(product.id)) {
+            await cleanupUploadedFiles();
+            return NextResponse.json({ success: false, error: 'Product ID tidak valid.' }, { status: 400 });
+          }
+          const migratedProduct = await migrateInlineProductFile(product);
+          if (migratedProduct.storageObjectKey
+            && !isProductObjectKeyForId(migratedProduct.storageObjectKey, migratedProduct.id)) {
+            await cleanupUploadedFiles();
+            return NextResponse.json({ success: false, error: 'Storage object key tidak sesuai dengan produk.' }, { status: 400 });
+          }
+          if (!product.storageObjectKey && migratedProduct.storageObjectKey) {
+            uploadedObjectKeys.push({ key: migratedProduct.storageObjectKey, productId: migratedProduct.id });
+          }
+          productMap.set(migratedProduct.id, migratedProduct);
+        }
+      } catch (error) {
+        await cleanupUploadedFiles();
+        return NextResponse.json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Gagal menyiapkan file produk.',
+        }, { status: 503 });
       }
       const mergedProducts = Array.from(productMap.values());
 
@@ -179,12 +221,19 @@ export async function POST(request: NextRequest) {
       writeLocal(mergedProducts);
 
       // 3. Commit all to GitHub
-      const syncRes = await commitProductsToGitHub(
-        mergedProducts,
-        `feat(catalog): publish ${bulkList.length} pending products to public catalog [skip ci]`
-      );
+      let syncRes: Awaited<ReturnType<typeof commitProductsToGitHub>>;
+      try {
+        syncRes = await commitProductsToGitHub(
+          mergedProducts,
+          `feat(catalog): publish ${bulkList.length} pending products to public catalog [skip ci]`
+        );
+      } catch (error) {
+        await cleanupUploadedFiles();
+        throw error;
+      }
 
       if (!syncRes.success) {
+        await cleanupUploadedFiles();
         return NextResponse.json(
           { success: false, error: syncRes.message },
           { status: 400 }
@@ -234,6 +283,7 @@ export async function POST(request: NextRequest) {
       thumbnail: productData.thumbnail || 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80',
       fileName: productData.fileName,
       fileData: productData.fileData,
+      storageObjectKey: productData.storageObjectKey,
       robloxAssetId: productData.robloxAssetId?.trim(),
       downloadUrl: productData.downloadUrl?.trim(),
       luauCode: productData.luauCode?.trim(),
@@ -253,6 +303,22 @@ export async function POST(request: NextRequest) {
       license: productData.license || 'Free Community Asset',
       isPremium: Boolean(productData.isPremium),
     };
+
+    if (!isValidProductId(formattedProduct.id)) {
+      return NextResponse.json({ success: false, error: 'Product ID tidak valid.' }, { status: 400 });
+    }
+    if (formattedProduct.storageObjectKey
+      && !isProductObjectKeyForId(formattedProduct.storageObjectKey, formattedProduct.id)) {
+      return NextResponse.json({ success: false, error: 'Storage object key tidak sesuai dengan produk.' }, { status: 400 });
+    }
+
+    if (!formattedProduct.storageObjectKey && formattedProduct.fileData?.startsWith('data:')) {
+      const migratedProduct = await migrateInlineProductFile(formattedProduct);
+      formattedProduct.fileData = migratedProduct.fileData;
+      formattedProduct.storageObjectKey = migratedProduct.storageObjectKey;
+      newlyUploadedObjectKey = migratedProduct.storageObjectKey;
+      newlyUploadedProductId = formattedProduct.id;
+    }
 
     // Insert or update in map
     productMap.set(formattedProduct.id, formattedProduct);
@@ -283,6 +349,15 @@ export async function POST(request: NextRequest) {
     );
 
     if (!syncRes.success) {
+      if (newlyUploadedObjectKey) {
+        try {
+          await deleteProductFile(newlyUploadedObjectKey, formattedProduct.id);
+          newlyUploadedObjectKey = undefined;
+          newlyUploadedProductId = undefined;
+        } catch (error) {
+          console.error('Failed to clean up an uncommitted product file:', error);
+        }
+      }
       return NextResponse.json(
         {
           success: false,
@@ -292,14 +367,34 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    let cleanupWarning: string | undefined;
+    if (existingProduct?.storageObjectKey && existingProduct.storageObjectKey !== formattedProduct.storageObjectKey) {
+      try {
+        await deleteProductFile(existingProduct.storageObjectKey, formattedProduct.id);
+      } catch (error) {
+        console.error(`Failed to remove replaced Storage file for product ${formattedProduct.id}:`, error);
+        cleanupWarning = 'Metadata produk tersimpan, tetapi file lama belum terhapus dari Supabase Storage.';
+      }
+    }
+
     return NextResponse.json({
       success: true,
       message: syncRes.message || 'Produk berhasil di-publish ke publik!',
       syncedWithGitHub: syncRes.success,
+      warning: cleanupWarning,
     });
   } catch (err: any) {
+    let cleanupWarning = '';
+    if (newlyUploadedObjectKey && newlyUploadedProductId) {
+      try {
+        await deleteProductFile(newlyUploadedObjectKey, newlyUploadedProductId);
+      } catch (cleanupError) {
+        console.error('Failed to clean up product file after a publish error:', cleanupError);
+        cleanupWarning = ' File Supabase Storage mungkin masih tersimpan dan perlu dibersihkan.';
+      }
+    }
     return NextResponse.json(
-      { success: false, error: err.message || 'Internal Server Error' },
+      { success: false, error: `${err.message || 'Internal Server Error'}${cleanupWarning}` },
       { status: 500 }
     );
   }
@@ -324,6 +419,9 @@ export async function DELETE(request: NextRequest) {
         { status: 400 }
       );
     }
+    if (!isValidProductId(id)) {
+      return NextResponse.json({ success: false, error: 'Product ID tidak valid.' }, { status: 400 });
+    }
 
     // 1. Delete from Firestore if configured
     if (db) {
@@ -335,6 +433,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     const currentProducts = await getProducts();
+    const deletedProduct = currentProducts.find((product) => product.id === id);
     const updatedList = currentProducts.filter((p) => p.id !== id);
 
     // 2. Write local
@@ -348,9 +447,21 @@ export async function DELETE(request: NextRequest) {
     if (!syncRes.success) {
       return NextResponse.json({ success: false, error: syncRes.message }, { status: 502 });
     }
+
+    let cleanupWarning: string | undefined;
+    if (deletedProduct?.storageObjectKey) {
+      try {
+        await deleteProductFile(deletedProduct.storageObjectKey, deletedProduct.id);
+      } catch (error) {
+        console.error(`Failed to delete Storage file for removed product ${deletedProduct.id}:`, error);
+        cleanupWarning = 'Produk sudah dihapus dari katalog, tetapi file masih tersimpan di Supabase Storage sehingga storage belum berkurang.';
+      }
+    }
+
     return NextResponse.json({
       success: true,
-      message: 'Produk berhasil dihapus permanen dari Cloud & GitHub!',
+      message: cleanupWarning || 'Produk dan file Supabase Storage berhasil dihapus permanen dari katalog.',
+      warning: cleanupWarning,
       syncedWithGitHub: syncRes.success,
     });
   } catch (err: any) {

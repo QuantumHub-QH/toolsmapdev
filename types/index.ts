@@ -21,6 +21,7 @@ export interface Asset {
   downloadUrl?: string;
   fileName?: string;
   fileData?: string;
+  storageObjectKey?: string;
   luauCode?: string;
   fileSize?: string;
   creator: {
@@ -38,6 +39,7 @@ export interface Asset {
   updatedAt: string;
   isPremium?: boolean;
   hasPrivateFile?: boolean;
+  hasStorageFile?: boolean;
 }
 
 export interface DevToolItem {

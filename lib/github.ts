@@ -61,6 +61,8 @@ export async function fetchProductsFromGitHub(): Promise<Asset[]> {
           cache: 'no-store',
         }
       );
+      if (res.status === 404) return [];
+      if (!res.ok) throw new Error(`GitHub catalog fetch failed with HTTP ${res.status}.`);
       if (res.ok) {
         const text = await res.text();
         const parsed = JSON.parse(text);
@@ -70,6 +72,7 @@ export async function fetchProductsFromGitHub(): Promise<Asset[]> {
       }
     } catch (e) {
       console.warn('Direct GitHub API fetch warning:', e);
+      throw e;
     }
   }
 

@@ -36,8 +36,60 @@ interface PremiumUserEntry {
 }
 
 const MAX_PUBLISH_REQUEST_BYTES = 4 * 1024 * 1024;
-const MAX_DIRECT_MAP_FILE_BYTES = 2.5 * 1024 * 1024;
+const MAX_DIRECT_MAP_FILE_BYTES = 25 * 1024 * 1024;
 const PUBLISH_REQUEST_TIMEOUT_MS = 65_000;
+
+class PublishRequestError extends Error {
+  constructor(message: string, readonly safeToCleanUpUploadedFile: boolean) {
+    super(message);
+  }
+}
+
+async function uploadProductFileToStorage(file: File, productId: string, sessionToken: string | null): Promise<string> {
+  const formData = new FormData();
+  formData.set('productId', productId);
+  formData.set('file', file);
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 120_000);
+  try {
+    const response = await fetch('/api/admin-panel/products/file', {
+      method: 'POST',
+      headers: sessionToken ? { Authorization: 'Bearer ' + sessionToken } : {},
+      body: formData,
+      signal: controller.signal,
+    });
+    const data = await response.json() as { success?: boolean; objectKey?: string; error?: string };
+    if (!response.ok || !data.success || !data.objectKey) {
+      throw new Error(data.error || `Gagal upload file ke Supabase Storage (HTTP ${response.status}).`);
+    }
+    return data.objectKey;
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('Upload ke Supabase Storage melewati batas waktu 2 menit.');
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function deleteUploadedProductFile(
+  objectKey: string,
+  productId: string,
+  sessionToken: string | null
+): Promise<void> {
+  const response = await fetch('/api/admin-panel/products/file', {
+    method: 'DELETE',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(sessionToken ? { Authorization: 'Bearer ' + sessionToken } : {}),
+    },
+    body: JSON.stringify({ objectKey, productId }),
+  });
+  const data = await response.json() as { success?: boolean; error?: string };
+  if (!response.ok || !data.success) {
+    throw new Error(data.error || `Gagal membersihkan file Supabase Storage (HTTP ${response.status}).`);
+  }
+}
 
 function createPublishBatches(products: Asset[]): Asset[][] {
   const batches: Asset[][] = [];
@@ -80,7 +132,7 @@ function saveProductsCache(products: Asset[]): boolean {
 async function publishRequest(
   payload: { product: Record<string, unknown> } | { bulkProducts: Asset[] },
   sessionToken: string | null
-): Promise<void> {
+): Promise<{ warning?: string }> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), PUBLISH_REQUEST_TIMEOUT_MS);
 
@@ -95,20 +147,21 @@ async function publishRequest(
       signal: controller.signal,
     });
     const responseText = await response.text();
-    let data: { success?: boolean; error?: string } = {};
+    let data: { success?: boolean; error?: string; warning?: string } = {};
     try {
-      data = JSON.parse(responseText) as { success?: boolean; error?: string };
+      data = JSON.parse(responseText) as { success?: boolean; error?: string; warning?: string };
     } catch {
       if (response.status === 413 || /request entity too large/i.test(responseText)) {
-        throw new Error('Data produk melampaui batas request Vercel 4 MB. Kecilkan gambar/file atau gunakan URL eksternal.');
+        throw new PublishRequestError('Data metadata melampaui batas request 4 MB. Kecilkan thumbnail atau gunakan URL eksternal.', true);
       }
     }
     if (!response.ok || !data.success) {
-      throw new Error(data.error || `Server menolak publish (HTTP ${response.status}).`);
+      throw new PublishRequestError(data.error || `Server menolak publish (HTTP ${response.status}).`, true);
     }
+    return { warning: data.warning };
   } catch (error) {
     if (controller.signal.aborted) {
-      throw new Error('Server belum merespons setelah 35 detik. Periksa status produk sebelum mencoba publish ulang.');
+      throw new Error('Server belum merespons setelah 65 detik. Periksa status produk sebelum mencoba publish ulang.');
     }
     throw error;
   } finally {
@@ -131,7 +184,7 @@ export default function AdminPanelPage() {
 
   const [products, setProducts] = useState<Asset[]>([]);
   const [liveProductIds, setLiveProductIds] = useState<Set<string>>(new Set());
-  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
   const [premiumUsers, setPremiumUsers] = useState<PremiumUserEntry[]>([]);
   const [premiumDiscordId, setPremiumDiscordId] = useState('');
   const [premiumDuration, setPremiumDuration] = useState<PremiumDuration>('1m');
@@ -150,6 +203,8 @@ export default function AdminPanelPage() {
   // Direct Uploaded Map File
   const [uploadedFileName, setUploadedFileName] = useState('');
   const [uploadedFileData, setUploadedFileData] = useState('');
+  const [uploadedMapFile, setUploadedMapFile] = useState<File | null>(null);
+  const [storageObjectKey, setStorageObjectKey] = useState('');
 
   // Fallback options
   const [robloxAssetId, setRobloxAssetId] = useState('');
@@ -422,10 +477,14 @@ export default function AdminPanelPage() {
     const file = e.target.files?.[0];
     if (file) {
       if (file.size > MAX_DIRECT_MAP_FILE_BYTES) {
-        alert('Ukuran file map langsung maksimal 2,5 MB agar data Base64 dan gambar tetap di bawah batas request Vercel.\n\nUntuk file yang lebih besar, upload ke penyimpanan file dan masukkan URL-nya di kolom "B. URL Download File Eksternal".');
+        alert('Ukuran file maksimal 25 MB.');
+        e.target.value = '';
         return;
       }
       setUploadedFileName(file.name);
+      setUploadedMapFile(file);
+      setUploadedFileData('');
+      setStorageObjectKey('');
       const sizeMb = (file.size / (1024 * 1024)).toFixed(2);
       setFileSize(`${sizeMb} MB`);
 
@@ -434,11 +493,6 @@ export default function AdminPanelPage() {
       else if (ext === 'OBJ') setFormat('OBJ');
       else if (ext === 'ZIP' || ext === 'RAR') setFormat('RBXM');
 
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setUploadedFileData(reader.result as string);
-      };
-      reader.readAsDataURL(file);
     }
   };
 
@@ -498,7 +552,7 @@ export default function AdminPanelPage() {
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     setSyncing(true);
-    setStatusMessage({ type: 'success', text: 'Sedang mengirim produk ke server untuk dipublikasikan...' });
+    setStatusMessage({ type: 'success', text: 'Sedang menyimpan metadata produk...' });
 
     const tagsArray = tagsInput
       .split(',')
@@ -514,7 +568,8 @@ export default function AdminPanelPage() {
       format,
       thumbnail: thumbnailUrl || 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80',
       fileName: uploadedFileName || undefined,
-      fileData: uploadedFileData || undefined,
+      fileData: uploadedMapFile ? undefined : uploadedFileData || undefined,
+      storageObjectKey: uploadedMapFile ? undefined : storageObjectKey || undefined,
       robloxAssetId: robloxAssetId.trim() || undefined,
       downloadUrl: downloadUrl.trim() || undefined,
       luauCode: luauCode.trim() || undefined,
@@ -530,47 +585,62 @@ export default function AdminPanelPage() {
       setSyncing(false);
       setStatusMessage({
         type: 'error',
-        text: 'Data produk melewati batas 4 MB. Kecilkan gambar/file atau gunakan URL eksternal, lalu coba lagi.',
+        text: 'Metadata produk melewati batas 4 MB. Kecilkan gambar thumbnail atau gunakan URL gambar eksternal.',
       });
       return;
     }
 
-    // 1. Immediately update local state & localStorage so product NEVER disappears
-    const currentList = [...products];
-    const existingIndex = currentList.findIndex((p) => p.id === productPayload.id);
-    let updatedLocalList: Asset[];
-    const nowIso = new Date().toISOString();
-    const formattedLocal: Asset = {
-      ...productPayload,
-      creator: { name: productPayload.creatorName, verified: true },
-      stats: existingIndex >= 0 ? currentList[existingIndex].stats : { downloads: 0, favorites: 0, views: 1 },
-      updatedAt: nowIso,
-    };
-    if (existingIndex >= 0) {
-      updatedLocalList = [...currentList];
-      updatedLocalList[existingIndex] = formattedLocal;
-    } else {
-      updatedLocalList = [formattedLocal, ...currentList];
-    }
-    setProducts(updatedLocalList);
-    const isCacheSaved = saveProductsCache(updatedLocalList);
-
+    const sessionToken = sessionStorage.getItem('admin_panel_session');
+    let newlyUploadedObjectKey: string | undefined;
+    let updatedLocalList: Asset[] | undefined;
     try {
-      const sessionToken = sessionStorage.getItem('admin_panel_session');
-      await publishRequest({ product: productPayload }, sessionToken);
+      if (uploadedMapFile) {
+        setStatusMessage({ type: 'success', text: `Mengunggah ${uploadedMapFile.name} ke Supabase Storage...` });
+        newlyUploadedObjectKey = await uploadProductFileToStorage(uploadedMapFile, productPayload.id, sessionToken);
+        productPayload.storageObjectKey = newlyUploadedObjectKey;
+      }
+
+      const currentList = [...products];
+      const existingIndex = currentList.findIndex((p) => p.id === productPayload.id);
+      const nowIso = new Date().toISOString();
+      const formattedLocal: Asset = {
+        ...productPayload,
+        creator: { name: productPayload.creatorName, verified: true },
+        stats: existingIndex >= 0 ? currentList[existingIndex].stats : { downloads: 0, favorites: 0, views: 1 },
+        updatedAt: nowIso,
+      };
+      updatedLocalList = [...currentList];
+      if (existingIndex >= 0) updatedLocalList[existingIndex] = formattedLocal;
+      else updatedLocalList.unshift(formattedLocal);
+      setProducts(updatedLocalList);
+      const isCacheSaved = saveProductsCache(updatedLocalList);
+
+      setStatusMessage({ type: 'success', text: 'Menyimpan katalog ke GitHub...' });
+      const result = await publishRequest({ product: productPayload }, sessionToken);
 
       setLiveProductIds((current) => new Set([...current, formattedLocal.id]));
       setStatusMessage({
-        type: 'success',
-        text: isCacheSaved
+        type: result.warning ? 'warning' : 'success',
+        text: result.warning || (isCacheSaved
           ? `🚀 Produk "${productPayload.title}" berhasil dipublish ke web publik.`
-          : `🚀 Produk "${productPayload.title}" berhasil dipublish. Cache browser penuh, tetapi produk tersimpan di server.`,
+          : `🚀 Produk "${productPayload.title}" berhasil dipublish. Cache browser penuh, tetapi produk tersimpan di server.`),
       });
       const remainingUnsynced = updatedLocalList.filter((product) => product.id !== formattedLocal.id && !liveProductIds.has(product.id));
       if (remainingUnsynced.length > 0) saveProductsCache(remainingUnsynced);
       else localStorage.removeItem('mapdev_saved_products');
       resetForm();
     } catch (err: any) {
+      if (err instanceof PublishRequestError && err.safeToCleanUpUploadedFile && newlyUploadedObjectKey) {
+        try {
+          await deleteUploadedProductFile(newlyUploadedObjectKey, productPayload.id, sessionToken);
+        } catch (cleanupError) {
+          console.error('Failed to clean up uploaded file after publish failure:', cleanupError);
+        }
+      }
+      if (updatedLocalList) {
+        setProducts(products);
+        saveProductsCache(products);
+      }
       setStatusMessage({
         type: 'error',
         text: 'Gagal publish: ' + err.message,
@@ -583,6 +653,7 @@ export default function AdminPanelPage() {
     if (!confirm('Yakin ingin menghapus produk ini dari katalog?')) return;
 
     setSyncing(true);
+    const deletedProduct = products.find((product) => product.id === id);
 
     // 1. Immediately blacklist ID in localStorage so it never reappears
     try {
@@ -607,15 +678,27 @@ export default function AdminPanelPage() {
         method: 'DELETE',
         headers: sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {},
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setStatusMessage({
-          type: 'success',
-          text: 'Produk berhasil dihapus permanen!',
-        });
+      const data = await res.json() as { success?: boolean; message?: string; warning?: string; error?: string };
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || `Gagal menghapus produk (HTTP ${res.status}).`);
       }
+      setStatusMessage({
+        type: data.warning ? 'warning' : 'success',
+        text: data.message || 'Produk berhasil dihapus permanen.',
+      });
     } catch (err) {
-      console.error('Delete API error:', err);
+      try {
+        const deletedIds = JSON.parse(localStorage.getItem('mapdev_deleted_ids') || '[]') as string[];
+        localStorage.setItem('mapdev_deleted_ids', JSON.stringify(deletedIds.filter((deletedId) => deletedId !== id)));
+      } catch {}
+      if (deletedProduct) {
+        setProducts(products);
+        saveProductsCache(products);
+      }
+      setStatusMessage({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Gagal menghapus produk.',
+      });
     } finally {
       setSyncing(false);
     }
@@ -632,6 +715,8 @@ export default function AdminPanelPage() {
     setImagePreview(item.thumbnail);
     setUploadedFileName(item.fileName || '');
     setUploadedFileData(item.fileData || '');
+    setUploadedMapFile(null);
+    setStorageObjectKey(item.storageObjectKey || '');
     setRobloxAssetId(item.robloxAssetId || '');
     setDownloadUrl(item.downloadUrl || '');
     setLuauCode(item.luauCode || '');
@@ -653,6 +738,8 @@ export default function AdminPanelPage() {
     setImagePreview('');
     setUploadedFileName('');
     setUploadedFileData('');
+    setUploadedMapFile(null);
+    setStorageObjectKey('');
     setRobloxAssetId('');
     setDownloadUrl('');
     setLuauCode('');
@@ -842,12 +929,16 @@ export default function AdminPanelPage() {
             className={`flex items-center justify-between rounded-xl p-4 text-xs font-medium border ${
               statusMessage.type === 'success'
                 ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
-                : 'border-red-500/40 bg-red-500/10 text-red-300'
+                : statusMessage.type === 'warning'
+                  ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+                  : 'border-red-500/40 bg-red-500/10 text-red-300'
             }`}
           >
             <div className="flex items-center gap-2">
               {statusMessage.type === 'success' ? (
                 <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+              ) : statusMessage.type === 'warning' ? (
+                <AlertCircle className="h-4 w-4 text-amber-300 shrink-0" />
               ) : (
                 <AlertCircle className="h-4 w-4 text-red-400 shrink-0" />
               )}
@@ -869,7 +960,7 @@ export default function AdminPanelPage() {
                 <span className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.2 rounded font-mono">Auto-Commit</span>
               </div>
               <p className="text-xs text-zinc-400 mt-0.5 max-w-xl">
-                Publish memakai <code>GITHUB_TOKEN</code> dari environment server Vercel. Token tidak dikirim atau disimpan di browser.
+                Metadata produk disimpan di GitHub; file di-upload ke bucket Supabase Storage privat. Secret hanya digunakan server.
               </p>
             </div>
           </div>
@@ -885,7 +976,7 @@ export default function AdminPanelPage() {
         </div>
 
         <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 text-xs text-zinc-400">
-          Token GitHub disimpan aman di Vercel sebagai environment variable <code>GITHUB_TOKEN</code>; jangan tempelkan token di browser.
+          GitHub menyimpan katalog, Supabase Storage menyimpan file produk hingga 25 MB. Upload dan download file tetap memerlukan sesi yang berwenang.
         </div>
 
         <section className="rounded-2xl border border-amber-500/25 bg-[#101014] p-5 shadow-xl sm:p-6">
@@ -1109,7 +1200,7 @@ export default function AdminPanelPage() {
                       Klik untuk Upload File Map dari Laptop/HP
                     </p>
                     <p className="text-[10px] text-zinc-400 mt-1">
-                      Format: <strong>.rbxm, .rbxl, .zip, .rar, .obj</strong> (Maks. 2,5 MB Direct Upload)
+                      Format: <strong>.rbxm, .rbxl, .zip, .rar, .obj</strong> (Maks. 25 MB, disimpan privat)
                     </p>
                   </label>
                 </div>
@@ -1122,7 +1213,12 @@ export default function AdminPanelPage() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => { setUploadedFileName(''); setUploadedFileData(''); }}
+                      onClick={() => {
+                        setUploadedFileName('');
+                        setUploadedFileData('');
+                        setUploadedMapFile(null);
+                        setStorageObjectKey('');
+                      }}
                       className="text-zinc-400 hover:text-red-400 ml-2"
                       title="Batalkan File"
                     >

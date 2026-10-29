@@ -163,10 +163,10 @@ export const AssetModal: React.FC<AssetModalProps> = ({
                 </div>
               )}
 
-              {(!asset.isPremium || hasPremiumAccess) && asset.fileData ? (
+              {(!asset.isPremium || hasPremiumAccess) && (asset.fileData || asset.hasStorageFile) ? (
                 <a
-                  href={asset.fileData}
-                  download={asset.fileName || `${asset.title.toLowerCase().replace(/[^a-z0-9]/g, '_')}.${asset.format === 'RBXM' ? 'rbxm' : 'zip'}`}
+                  href={asset.hasStorageFile ? `/api/assets/file?id=${encodeURIComponent(asset.id)}` : asset.fileData}
+                  download={asset.hasStorageFile ? undefined : asset.fileName || `${asset.title.toLowerCase().replace(/[^a-z0-9]/g, '_')}.${asset.format === 'RBXM' ? 'rbxm' : 'zip'}`}
                   onClick={() => onDownload?.(asset.id)}
                   className="flex items-center justify-center gap-2 w-full rounded-xl border border-white bg-white text-black font-bold py-2.5 px-4 text-xs hover:bg-zinc-200 transition-colors shadow-lg cursor-pointer"
                 >

@@ -39,6 +39,7 @@ An ultra-modern, high-performance developer hub and free resource suite for Robl
 
 ### 4. 🌐 Backend REST API Endpoints
 - `GET /api/assets`: Search, category filtering, and tag queries.
+- `GET /api/assets/file?id=<product-id>`: Download a private Supabase Storage product file after Discord/Premium checks.
 - `POST /api/assets`: Submit community assets and resources.
 - `GET /api/tools`: Retrieve dev tools, lighting presets, and code snippets.
 - `GET /api/stats`: Live statistics on assets, downloads, and community metrics.
@@ -89,11 +90,15 @@ This Next.js app uses the OpenNext Cloudflare adapter. In Cloudflare Workers & P
 - **Preview command:** `npx opennextjs-cloudflare preview`
 - Leave **Protect with Cloudflare Access** off for a public website.
 
+Create a **private** Supabase Storage bucket named `product-files` with a 25 MB file-size limit. Do not make the bucket public. Product metadata stays in the private GitHub data repository; uploaded product files are stored in Supabase Storage and served only through the Worker after Discord and Premium authorization checks. Deleting a product commits the catalog removal first, then deletes its Storage object; the Admin Panel reports if cleanup fails.
+
 Add these server-side values in the Worker's **Settings → Variables and Secrets** before relying on app features. Never commit their values:
 
 - `GITHUB_TOKEN` — least-privilege token with access to `QuantumHub-QH/mchlern`, where catalog, Premium, and upload-limit data are currently stored.
 - `ADMIN_PASSWORD` — strong admin password and signing secret for sessions.
 - `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, and `DISCORD_REDIRECT_URI`.
+- `SUPABASE_URL` — the project URL shown in the Supabase dashboard.
+- `SUPABASE_SECRET_KEY` — the project's server-side secret API key. Never expose it in a `NEXT_PUBLIC_*` variable or browser code.
 - `NEXT_PUBLIC_FIREBASE_API_KEY` and `NEXT_PUBLIC_FIREBASE_PROJECT_ID` if the Firebase fallback is used; add the other `NEXT_PUBLIC_FIREBASE_*` settings when applicable.
 
 Set `DISCORD_REDIRECT_URI` to `https://<worker-domain>/api/auth/discord/callback` and register that exact callback in the Discord Developer Portal. Update it again if you later switch to a custom domain. The website repository (`toolsmapdev`) and the data repository (`mchlern`) are separate; the GitHub token must have access to the latter.
@@ -114,6 +119,8 @@ To prevent direct access to the catalog outside the website:
 4. Publish [`firestore.rules`](./firestore.rules) to Cloud Firestore if Firebase is used, so browser clients cannot read the fallback `products` collection directly.
 5. Keep a strong `ADMIN_PASSWORD` configured as a server-side secret. Set all variables for the target environment and redeploy after changing them.
 6. In Admin Panel → **Kelola User Premium**, enter the buyer's Discord user ID and choose a duration from one week through one year. Re-adding an active user extends from their current expiry; deleting the user revokes Premium immediately. Expired users automatically lose Premium features. Premium accounts have unlimited daily audio/image uploads; free accounts retain the server-enforced limit of 10 successful uploads per day.
+
+Product file objects are stored in the private `product-files` Supabase Storage bucket. Keep the bucket private; the Worker serves file downloads only after checking the Discord session and, for Premium products, the current entitlement. Product deletions remove the corresponding Storage object after the GitHub catalog update succeeds. Older Base64 files already committed in Git history are not erased by this migration or by catalog deletion; re-save those products to move their current files into Supabase Storage, and clean repository history separately if historical GitHub storage must also be reclaimed.
 
 The data repository is separate from the website's public availability: making `mchlern` private does not make the deployed site private, provided the Worker has a valid `GITHUB_TOKEN`.
 
