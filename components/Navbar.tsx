@@ -22,8 +22,8 @@ import { DISCORD_PREMIUM_CONTACT_URL } from '@/lib/discord';
 interface NavbarProps {
   onOpenBookmarks: () => void;
   bookmarksCount: number;
-  activeSection: string;
-  setActiveSection: (section: string) => void;
+  activeSection: 'assets' | 'tools';
+  setActiveSection: (section: 'assets' | 'tools') => void;
   onSearchFocus: () => void;
   discordUser: DiscordUser | null;
   onOpenDiscordAuth: () => void;
@@ -44,17 +44,14 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [isPremiumPlansOpen, setIsPremiumPlansOpen] = useState(false);
 
   const navItems = [
-    { id: 'assets', label: 'Map Assets', icon: Box },
-    { id: 'tools', label: 'Dev Tools', icon: Wrench },
-  ];
+    { id: 'assets', label: 'Produk', icon: Box },
+    { id: 'tools', label: 'Tools Uploader', icon: Wrench },
+  ] as const;
 
-  const handleNavClick = (id: string) => {
+  const handleNavClick = (id: 'assets' | 'tools') => {
     setActiveSection(id);
     setMobileMenuOpen(false);
-    const element = document.getElementById(id);
-    if (element) {
-      element.scrollIntoView({ behavior: 'smooth' });
-    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   return (
@@ -85,13 +82,17 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
 
         {/* Desktop Navigation Links */}
-        <nav className="hidden md:flex items-center gap-1 rounded-full border border-border bg-surface/80 p-1">
+        <nav aria-label="Navigasi utama" role="tablist" className="hidden md:flex items-center gap-1 rounded-full border border-border bg-surface/80 p-1">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeSection === item.id;
             return (
               <button
                 key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                aria-controls={`${item.id}-panel`}
                 onClick={() => handleNavClick(item.id)}
                 className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-medium transition-all ${
                   isActive
@@ -193,13 +194,17 @@ export const Navbar: React.FC<NavbarProps> = ({
       {/* Mobile Drawer Navigation */}
       {mobileMenuOpen && (
         <div className="md:hidden border-b border-border bg-background px-4 py-4 space-y-2 animate-fade-in">
-          <div className="grid grid-cols-2 gap-2 pb-2">
+          <div aria-label="Navigasi utama" role="tablist" className="grid grid-cols-2 gap-2 pb-2">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeSection === item.id;
               return (
                 <button
                   key={item.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  aria-controls={`${item.id}-panel`}
                   onClick={() => handleNavClick(item.id)}
                   className={`flex items-center gap-2 rounded-lg p-2.5 text-xs font-medium border text-left transition-colors ${
                     isActive

@@ -20,13 +20,10 @@ import {
   Download,
   Code2,
   RefreshCw,
-  Sparkles,
   ShieldCheck,
   Eye,
   EyeOff,
   Sliders,
-  Volume2,
-  Gauge,
   Lock,
   ArrowRight
 } from 'lucide-react';
@@ -54,7 +51,6 @@ interface UploadQueueItem {
   moderationState?: string;
   errorMessage?: string;
   speed: number;
-  pitch: number;
   volume: number;
 }
 
@@ -248,8 +244,8 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
 
   // Audio Customization Settings
   const [audioSpeed, setAudioSpeed] = useState<number>(1.0);
-  const [audioPitch, setAudioPitch] = useState<number>(1.0);
   const [audioVolume, setAudioVolume] = useState<number>(100);
+  const [hasConfirmedRights, setHasConfirmedRights] = useState(false);
 
   // Upload Queues for Audio and Image (Max 10 per batch)
   const [audioQueue, setAudioQueue] = useState<UploadQueueItem[]>([]);
@@ -260,41 +256,17 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
   // Copy feedback
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [copiedAll, setCopiedAll] = useState(false);
-  const [copiedScript, setCopiedScript] = useState(false);
 
   // Audio Playback state for preview
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
 
-  // Media URL Fetch State (YouTube, TikTok, YouTube Music)
-  const [urlInput, setUrlInput] = useState('');
-  const [isFetchingUrl, setIsFetchingUrl] = useState(false);
-  const [fetchError, setFetchError] = useState<string | null>(null);
-  const [fetchedMedia, setFetchedMedia] = useState<{
-    platform: 'youtube' | 'youtube_music' | 'tiktok';
-    title: string;
-    author: string;
-    thumbnail: string;
-    duration: number;
-    audioUrl: string;
-    proxyAudioUrl: string;
-  } | null>(null);
-  const [isAddingFetched, setIsAddingFetched] = useState(false);
-  const [isPlayingFetched, setIsPlayingFetched] = useState(false);
-  const fetchedAudioPlayerRef = useRef<HTMLAudioElement | null>(null);
-
-  // Load saved Roblox session on mount
+  // Remove API keys saved by older versions; keys now live only in memory.
   useEffect(() => {
     try {
-      const saved = localStorage.getItem('roblox_cloud_session');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && parsed.userId && parsed.apiKey) {
-          setRobloxSession(parsed);
-        }
-      }
+      localStorage.removeItem('roblox_cloud_session');
     } catch (e) {
-      console.error('Error loading roblox session:', e);
+      console.error('Could not clear a previously saved Roblox API key:', e);
     }
   }, []);
 
@@ -327,144 +299,14 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
     fetchDailyQuota();
   }, [discordUser?.id, discordUser?.isPremium]);
 
-  // Recommended In-Game Roblox PlaybackSpeed
-  const recommendedPlaybackSpeed = audioSpeed > 0 ? (1 / audioSpeed).toFixed(2) : '1.00';
-
-  // Bypass Presets
-  const applyPreset = (speed: number, pitch: number) => {
+  const applyPreset = (speed: number) => {
     setAudioSpeed(speed);
-    setAudioPitch(pitch);
-    // If playing preview, update live playback rate
     if (audioPlayerRef.current) {
       audioPlayerRef.current.playbackRate = speed;
     }
   };
 
   // Format seconds to mm:ss
-  const formatDuration = (seconds: number) => {
-    if (!seconds || isNaN(seconds)) return '0:00';
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
-  };
-
-  // Fetch audio info from YouTube, TikTok, or YouTube Music URL
-  const handleFetchMediaUrl = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const targetUrl = urlInput.trim();
-    if (!targetUrl) {
-      setFetchError('Masukkan URL YouTube, YouTube Music, atau TikTok terlebih dahulu.');
-      return;
-    }
-
-    setIsFetchingUrl(true);
-    setFetchError(null);
-    setFetchedMedia(null);
-    if (fetchedAudioPlayerRef.current) {
-      fetchedAudioPlayerRef.current.pause();
-      setIsPlayingFetched(false);
-    }
-
-    try {
-      const res = await fetch('/api/media/fetch-audio', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: targetUrl }),
-      });
-
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setFetchedMedia(data);
-      } else {
-        setFetchError(data.error || 'Gagal mengambil audio dari link tersebut.');
-      }
-    } catch (err: any) {
-      setFetchError('Koneksi gagal: ' + err.message);
-    } finally {
-      setIsFetchingUrl(false);
-    }
-  };
-
-  // Add fetched audio directly to the upload queue (applies DSP bypass settings)
-  const handleAddFetchedToQueue = async () => {
-    if (!fetchedMedia) return;
-
-    if (!discordUser) {
-      onOpenDiscordAuth();
-      return;
-    }
-
-    if (!dailyQuota.unlimited && dailyQuota.remaining <= 0) {
-      alert('Kuota upload hari ini sudah habis (10/10). Kuota akan reset kembali pada jam 00:00!');
-      return;
-    }
-
-    if (audioQueue.length >= 10) {
-      alert('Maksimal 10 file audio dalam satu antrean batch!');
-      return;
-    }
-
-    setIsAddingFetched(true);
-
-    try {
-      const res = await fetch(fetchedMedia.proxyAudioUrl);
-      if (!res.ok) {
-        throw new Error(`Gagal mendownload audio stream (HTTP ${res.status})`);
-      }
-      const blob = await res.blob();
-      const ext = fetchedMedia.platform === 'tiktok' ? '.mp3' : '.webm';
-      const cleanTitle = fetchedMedia.title.replace(/[^a-zA-Z0-9_\-\s]/g, '').trim() || 'stream_audio';
-      const fileName = `${cleanTitle}${ext}`;
-      const file = new File([blob], fileName, { type: blob.type || 'audio/mpeg' });
-
-      const newQueueItem: UploadQueueItem = {
-        id: `fetched-${Date.now()}`,
-        file,
-        name: fileName,
-        size: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
-        type: 'Audio',
-        speed: audioSpeed,
-        pitch: audioPitch,
-        volume: audioVolume,
-        status: 'pending',
-        previewUrl: URL.createObjectURL(file),
-      };
-
-      setAudioQueue((prev) => [...prev, newQueueItem]);
-      setFetchedMedia(null);
-      setUrlInput('');
-      if (fetchedAudioPlayerRef.current) {
-        fetchedAudioPlayerRef.current.pause();
-        setIsPlayingFetched(false);
-      }
-    } catch (err: any) {
-      alert('Gagal menambahkan ke antrean: ' + err.message);
-    } finally {
-      setIsAddingFetched(false);
-    }
-  };
-
-  // Toggle play audio preview for fetched media
-  const togglePlayFetchedPreview = () => {
-    if (!fetchedMedia || !fetchedAudioPlayerRef.current) return;
-    if (isPlayingFetched) {
-      fetchedAudioPlayerRef.current.pause();
-      setIsPlayingFetched(false);
-    } else {
-      if (audioPlayerRef.current) {
-        audioPlayerRef.current.pause();
-        setPlayingAudioId(null);
-      }
-      fetchedAudioPlayerRef.current.src = fetchedMedia.proxyAudioUrl;
-      fetchedAudioPlayerRef.current.playbackRate = audioSpeed;
-      fetchedAudioPlayerRef.current.volume = audioVolume / 100;
-      fetchedAudioPlayerRef.current
-        .play()
-        .then(() => setIsPlayingFetched(true))
-        .catch(() => setIsPlayingFetched(false));
-    }
-  };
-
   // Connect Roblox Account handler
   const handleConnectRoblox = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -499,7 +341,6 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
       };
 
       setRobloxSession(session);
-      localStorage.setItem('roblox_cloud_session', JSON.stringify(session));
       setApiKeyInput('');
       setUserIdInput('');
     } catch (err: any) {
@@ -551,7 +392,6 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
       previewUrl: URL.createObjectURL(file),
       status: 'pending',
       speed: audioSpeed,
-      pitch: audioPitch,
       volume: audioVolume,
     }));
 
@@ -593,7 +433,6 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
       previewUrl: URL.createObjectURL(file),
       status: 'pending',
       speed: 1.0,
-      pitch: 1.0,
       volume: 100,
     }));
 
@@ -649,6 +488,11 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
 
   // Start Bulk Uploading to Roblox Open Cloud
   const handleStartBulkUpload = async (type: 'audio' | 'image') => {
+    if (!hasConfirmedRights) {
+      alert('Konfirmasi bahwa kamu memiliki hak atau izin untuk mengunggah file ini.');
+      return;
+    }
+
     if (!discordUser) {
       alert('Harap hubungkan akun Discord terlebih dahulu untuk mengaktifkan kuota upload harian!');
       onOpenDiscordAuth();
@@ -844,14 +688,6 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
     setTimeout(() => setCopiedAll(false), 2500);
   };
 
-  // Copy Roblox Studio Script PlaybackSpeed
-  const handleCopyScript = () => {
-    const script = `-- Script Roblox Studio (Normal Speed In-Game)\nsound.PlaybackSpeed = ${recommendedPlaybackSpeed}\nsound:Play()`;
-    navigator.clipboard.writeText(script);
-    setCopiedScript(true);
-    setTimeout(() => setCopiedScript(false), 2000);
-  };
-
   // Download log report (.txt)
   const handleDownloadLog = (type: 'audio' | 'image') => {
     const queue = type === 'audio' ? audioQueue : imageQueue;
@@ -862,8 +698,7 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
     content += `Discord User: ${discordUser ? `@${discordUser.username} (${discordUser.id})` : 'Guest'}\n`;
     content += `Date: ${new Date().toLocaleString()}\n`;
     if (type === 'audio') {
-      content += `Audio Speed: ${audioSpeed}x | Pitch: ${audioPitch}x | Volume: ${audioVolume}%\n`;
-      content += `Recommended In-Game PlaybackSpeed: ${recommendedPlaybackSpeed}\n`;
+      content += `Audio Speed: ${audioSpeed}x | Volume: ${audioVolume}%\n`;
     }
     content += `Total Files: ${queue.length}\n\n`;
 
@@ -896,13 +731,13 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
         <div className="text-center max-w-3xl mx-auto space-y-3">
           <div className="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 text-xs font-mono text-zinc-300">
             <span className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
-            <span>ROBLOX OPEN CLOUD BULK UPLOADER</span>
+            <span>ROBLOX OPEN CLOUD ASSET UPLOADER</span>
           </div>
           <h2 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white uppercase font-mono">
-            Roblox Bulk <span className="bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent">Uploader Tools</span>
+            Roblox <span className="bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent">Uploader Tools</span>
           </h2>
           <p className="text-xs sm:text-sm text-zinc-400 leading-relaxed">
-            Upload langsung ke akun Roblox Studio dengan bypass audio speed & pitch. Maksimal <strong>10 file per batch</strong> dengan kuota <strong>10 upload per hari</strong> terikat akun Discord.
+            Upload audio dan gambar ke akun Roblox kamu. Maksimal <strong>10 file per batch</strong>; kuota gratis <strong>10 upload berhasil per hari</strong>.
           </p>
         </div>
 
@@ -990,7 +825,7 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
 
                   <div className="flex items-center gap-2 mt-1.5 text-[11px] font-mono text-blue-400">
                     <ShieldCheck className="h-3.5 w-3.5 text-blue-400" />
-                    <span>Open Cloud API Key Aktif (Siap Bulk Upload)</span>
+                    <span>Roblox account connected for uploads</span>
                   </div>
                 </div>
               </div>
@@ -1015,7 +850,7 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                     <span>Hubungkan Akun Roblox (Open Cloud API)</span>
                   </h3>
                   <p className="text-xs text-zinc-400 mt-0.5">
-                    Masukkan API Key & User ID Roblox kamu untuk upload audio/gambar langsung ke akun Roblox Studio kamu.
+                    Masukkan API Key dan User ID untuk mengunggah langsung ke akun Roblox kamu.
                   </p>
                 </div>
 
@@ -1041,11 +876,12 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                 {/* API Key */}
                 <div className="sm:col-span-6">
                   <label className="block text-xs font-mono text-zinc-300 mb-1">
-                    1. Roblox Open Cloud API Key *
+                    Roblox Open Cloud API Key *
                   </label>
                   <div className="relative flex items-center">
                     <input
                       type={showApiKey ? 'text' : 'password'}
+                      autoComplete="new-password"
                       required
                       value={apiKeyInput}
                       onChange={(e) => setApiKeyInput(e.target.value)}
@@ -1065,7 +901,7 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                 {/* User ID */}
                 <div className="sm:col-span-3">
                   <label className="block text-xs font-mono text-zinc-300 mb-1">
-                    2. Roblox User ID *
+                    Roblox User ID *
                   </label>
                   <input
                     type="text"
@@ -1091,140 +927,148 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
               </form>
 
               <div className="rounded-lg bg-zinc-900/60 p-2.5 text-[11px] font-mono text-zinc-400 border border-zinc-800">
-                💡 <strong>Cara buat API Key:</strong> Buka Creator Dashboard ➔ Credentials ➔ Create API Key ➔ Tambahkan permission <strong>Assets (Read & Write)</strong> ➔ Copy API Key dan paste di atas.
+                <strong>Cara buat API Key:</strong> Buka Creator Dashboard → Credentials → Create API Key, lalu beri izin Assets yang diperlukan. Key hanya disimpan sementara di tab ini dan dikirim ke server melalui HTTPS; key tidak disimpan di browser setelah halaman ditutup.
               </div>
             </div>
           )}
         </div>
 
-        {/* 2. DEDICATED TOOLS NAVIGATION (DIPISAH: AUDIO vs IMAGE) */}
+        {/* Uploader navigation */}
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-zinc-800 pb-4">
-          <div className="flex items-center gap-3">
+          <div role="tablist" aria-label="Pilih uploader" className="flex w-full items-center gap-2 sm:w-auto sm:gap-3">
             <button
+              type="button"
+              role="tab"
+              aria-selected={activeTool === 'audio'}
               onClick={() => setActiveTool('audio')}
-              className={`flex items-center gap-2.5 rounded-xl px-5 py-3 text-xs font-bold font-mono uppercase transition-all ${
+              className={`flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-3 text-xs font-bold font-mono uppercase transition-all sm:flex-none sm:gap-2.5 sm:px-5 ${
                 activeTool === 'audio'
                   ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20 scale-102 border border-blue-400'
                   : 'bg-surface border border-border text-zinc-400 hover:text-white hover:border-zinc-700'
               }`}
             >
               <Music className="h-4 w-4" />
-              <span>1. Audio Uploader ({audioQueue.length}/10)</span>
+              <span>Audio Uploader ({audioQueue.length}/10)</span>
             </button>
 
             <button
+              type="button"
+              role="tab"
+              aria-selected={activeTool === 'image'}
               onClick={() => setActiveTool('image')}
-              className={`flex items-center gap-2.5 rounded-xl px-5 py-3 text-xs font-bold font-mono uppercase transition-all ${
+              className={`flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-3 text-xs font-bold font-mono uppercase transition-all sm:flex-none sm:gap-2.5 sm:px-5 ${
                 activeTool === 'image'
                   ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/20 scale-102 border border-purple-400'
                   : 'bg-surface border border-border text-zinc-400 hover:text-white hover:border-zinc-700'
               }`}
             >
               <ImageIcon className="h-4 w-4" />
-              <span>2. Image Uploader ({imageQueue.length}/10)</span>
+              <span>Image Uploader ({imageQueue.length}/10)</span>
             </button>
           </div>
 
-          <div className="text-xs font-mono text-zinc-400">
-            Tool Aktif: <strong className="text-white">{activeTool === 'audio' ? '🎵 ROBLOX AUDIO BULK UPLOADER' : '🖼️ ROBLOX IMAGE BULK UPLOADER'}</strong>
+          <div className="hidden text-xs font-mono text-zinc-400 sm:block">
+            Uploader aktif: <strong className="text-white">{activeTool === 'audio' ? 'Audio' : 'Image'}</strong>
           </div>
         </div>
+
+        <label className="flex items-start gap-3 rounded-xl border border-zinc-800 bg-[#101014] p-4 text-xs leading-relaxed text-zinc-300">
+          <input
+            type="checkbox"
+            checked={hasConfirmedRights}
+            onChange={(event) => setHasConfirmedRights(event.target.checked)}
+            className="mt-0.5 h-4 w-4 shrink-0 accent-blue-500"
+          />
+          <span>
+            Saya memiliki hak atau izin untuk mengunggah file ini dan akan mematuhi aturan Roblox.
+          </span>
+        </label>
 
         {/* 3. TOOL CONTENT PANELS */}
         {activeTool === 'audio' ? (
           /* ============================================================== */
-          /* 🎵 AUDIO UPLOADER VIEW (DIPISAH + SPEED/PITCH/VOLUME SETTINGS) */
+          /* Audio uploader */
           /* ============================================================== */
           <div className="space-y-6">
 
-            {/* AUDIO BYPASS & SPEED / PITCH / VOLUME CONTROLS */}
+            {/* Audio adjustments for user-owned or licensed files */}
             <div className="rounded-2xl border border-zinc-800 bg-[#101014] p-6 space-y-6">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-4 border-b border-zinc-800">
                 <div>
                   <h3 className="text-sm font-bold text-white font-mono uppercase flex items-center gap-2">
                     <Sliders className="h-4 w-4 text-blue-400" />
-                    <span>Audio Bypass DSP Settings (Speed, Pitch, Volume)</span>
+                    <span>Pengaturan audio</span>
                   </h3>
                   <p className="text-xs text-zinc-400 mt-0.5">
-                    Ubah kecepatan & pitch audio untuk lolos deteksi otomatis Roblox. Hasil preview dan upload akan mengikuti settingan ini!
+                    Atur kecepatan dan volume untuk kebutuhan kreatif. Roblox tetap meninjau setiap upload.
                   </p>
                 </div>
 
                 <div className="rounded-lg bg-blue-500/10 border border-blue-500/30 px-3 py-1 text-xs font-mono text-blue-400">
-                  Speed: <strong>{audioSpeed}x</strong> • Pitch: <strong>{audioPitch}x</strong>
+                  Speed: <strong>{audioSpeed.toFixed(1)}x</strong> • Volume: <strong>{audioVolume}%</strong>
                 </div>
               </div>
 
-              {/* Template Bypass Buttons */}
               <div>
                 <span className="block text-xs font-mono text-zinc-400 mb-2 font-semibold">
-                  ⚡ Pilihan Template Bypass Otomatis (Kombinasi Speed & Pitch):
+                  Preset kecepatan:
                 </span>
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
                   <button
-                    onClick={() => applyPreset(1.0, 1.0)}
+                    type="button"
+                    onClick={() => applyPreset(0.85)}
                     className={`rounded-xl border p-2.5 text-center transition-all ${
-                      audioSpeed === 1.0
+                      audioSpeed === 0.85
                         ? 'border-white bg-white text-black font-bold shadow-md'
                         : 'border-zinc-800 bg-black/60 text-zinc-300 hover:border-zinc-600'
                     }`}
                   >
-                    <span className="block text-xs font-mono">Normal</span>
-                    <span className="text-[10px] text-zinc-500 font-mono block">1.0x (Orig)</span>
+                    <span className="block text-xs font-mono">Lambat</span>
+                    <span className="text-[10px] text-zinc-500 font-mono block">0.85x</span>
                   </button>
 
                   <button
-                    onClick={() => applyPreset(1.3, 1.15)}
+                    type="button"
+                    onClick={() => applyPreset(1.0)}
                     className={`rounded-xl border p-2.5 text-center transition-all ${
-                      audioSpeed === 1.3
+                      audioSpeed === 1.0
                         ? 'border-blue-400 bg-blue-500/20 text-blue-300 font-bold shadow-md'
                         : 'border-zinc-800 bg-black/60 text-zinc-300 hover:border-zinc-600'
                     }`}
                   >
-                    <span className="block text-xs font-mono">Bypass 1.3x</span>
-                    <span className="text-[10px] text-blue-400/80 font-mono block">Speed: 1.3x</span>
+                    <span className="block text-xs font-mono">Normal</span>
+                    <span className="text-[10px] text-blue-400/80 font-mono block">1.0x</span>
                   </button>
 
                   <button
-                    onClick={() => applyPreset(2.3, 1.35)}
+                    type="button"
+                    onClick={() => applyPreset(1.15)}
                     className={`rounded-xl border p-2.5 text-center transition-all ${
-                      audioSpeed === 2.3
+                      audioSpeed === 1.15
                         ? 'border-indigo-400 bg-indigo-500/20 text-indigo-300 font-bold shadow-md'
                         : 'border-zinc-800 bg-black/60 text-zinc-300 hover:border-zinc-600'
                     }`}
                   >
-                    <span className="block text-xs font-mono">Bypass 2.3x</span>
-                    <span className="text-[10px] text-indigo-400/80 font-mono block">Speed: 2.3x</span>
+                    <span className="block text-xs font-mono">Sedikit cepat</span>
+                    <span className="text-[10px] text-indigo-400/80 font-mono block">1.15x</span>
                   </button>
 
                   <button
-                    onClick={() => applyPreset(2.5, 1.45)}
+                    type="button"
+                    onClick={() => applyPreset(1.3)}
                     className={`rounded-xl border p-2.5 text-center transition-all ${
-                      audioSpeed === 2.5
+                      audioSpeed === 1.3
                         ? 'border-purple-400 bg-purple-500/20 text-purple-300 font-bold shadow-md'
                         : 'border-zinc-800 bg-black/60 text-zinc-300 hover:border-zinc-600'
                     }`}
                   >
-                    <span className="block text-xs font-mono">Bypass 2.5x</span>
-                    <span className="text-[10px] text-purple-400/80 font-mono block">Speed: 2.5x</span>
-                  </button>
-
-                  <button
-                    onClick={() => applyPreset(3.0, 1.6)}
-                    className={`rounded-xl border p-2.5 text-center transition-all ${
-                      audioSpeed === 3.0
-                        ? 'border-rose-400 bg-rose-500/20 text-rose-300 font-bold shadow-md'
-                        : 'border-zinc-800 bg-black/60 text-zinc-300 hover:border-zinc-600'
-                    }`}
-                  >
-                    <span className="block text-xs font-mono">Bypass 3.0x</span>
-                    <span className="text-[10px] text-rose-400/80 font-mono block">Speed: 3.0x</span>
+                    <span className="block text-xs font-mono">Cepat</span>
+                    <span className="text-[10px] text-purple-400/80 font-mono block">1.3x</span>
                   </button>
                 </div>
               </div>
 
-              {/* Sliders Grid: Speed, Pitch, Volume */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 pt-2">
+              <div className="grid grid-cols-1 gap-6 pt-2 sm:grid-cols-2">
                 {/* Speed Slider */}
                 <div className="space-y-1.5">
                   <div className="flex justify-between text-xs font-mono">
@@ -1234,7 +1078,7 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                   <input
                     type="range"
                     min="0.5"
-                    max="4.0"
+                    max="2.0"
                     step="0.1"
                     value={audioSpeed}
                     onChange={(e) => {
@@ -1247,43 +1091,20 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                   <div className="flex justify-between text-[10px] font-mono text-zinc-600">
                     <span>0.5x</span>
                     <span>1.0x</span>
-                    <span>2.3x</span>
-                    <span>4.0x</span>
+                    <span>1.5x</span>
+                    <span>2.0x</span>
                   </div>
                 </div>
 
-                {/* Pitch Slider */}
                 <div className="space-y-1.5">
                   <div className="flex justify-between text-xs font-mono">
-                    <span className="text-zinc-400">Audio Pitch:</span>
-                    <span className="text-white font-bold">{audioPitch.toFixed(2)}x</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0.5"
-                    max="2.0"
-                    step="0.05"
-                    value={audioPitch}
-                    onChange={(e) => setAudioPitch(parseFloat(e.target.value))}
-                    className="w-full accent-indigo-500 cursor-pointer"
-                  />
-                  <div className="flex justify-between text-[10px] font-mono text-zinc-600">
-                    <span>0.5x (Bass)</span>
-                    <span>1.0x</span>
-                    <span>2.0x (High)</span>
-                  </div>
-                </div>
-
-                {/* Volume Slider */}
-                <div className="space-y-1.5">
-                  <div className="flex justify-between text-xs font-mono">
-                    <span className="text-zinc-400">Audio Volume Boost:</span>
+                    <span className="text-zinc-400">Volume audio:</span>
                     <span className="text-white font-bold">{audioVolume}%</span>
                   </div>
                   <input
                     type="range"
-                    min="20"
-                    max="200"
+                    min="0"
+                    max="100"
                     step="5"
                     value={audioVolume}
                     onChange={(e) => {
@@ -1294,42 +1115,13 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                     className="w-full accent-purple-500 cursor-pointer"
                   />
                   <div className="flex justify-between text-[10px] font-mono text-zinc-600">
-                    <span>20%</span>
+                    <span>0%</span>
+                    <span>50%</span>
                     <span>100%</span>
-                    <span>200%</span>
                   </div>
                 </div>
               </div>
 
-              {/* REAL-TIME RECOMMENDED PLAYBACKSPEED CARD */}
-              <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                <div className="flex items-start gap-3">
-                  <div className="h-9 w-9 rounded-lg bg-blue-500/20 flex items-center justify-center text-blue-400 shrink-0">
-                    <Gauge className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <span className="text-xs font-mono text-zinc-400 block">
-                      Rekomendasi Roblox In-Game PlaybackSpeed:
-                    </span>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-xl font-mono font-bold text-white tracking-wider">
-                        {recommendedPlaybackSpeed}
-                      </span>
-                      <span className="text-[11px] font-mono text-zinc-400">
-                        (Formula: 1 / {audioSpeed.toFixed(1)}x = {recommendedPlaybackSpeed})
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <button
-                  onClick={handleCopyScript}
-                  className="flex items-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-500 px-3.5 py-2 text-xs font-mono font-bold text-white transition-all shadow-md active:scale-95 shrink-0"
-                >
-                  {copiedScript ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-                  <span>{copiedScript ? 'Script Copied!' : 'Copy Script PlaybackSpeed'}</span>
-                </button>
-              </div>
             </div>
 
             {/* Upload Zone (Max 10) */}
@@ -1362,174 +1154,6 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
               </label>
             </div>
 
-{/* Divider OR / ATAU */}
-            <div className="flex items-center gap-4 my-2">
-              <div className="h-px bg-zinc-800 flex-1" />
-              <span className="text-[11px] font-mono font-bold text-zinc-500 uppercase">
-                ATAU SALIN LINK MEDIA
-              </span>
-              <div className="h-px bg-zinc-800 flex-1" />
-            </div>
-
-            {/* Fetch Audio from YouTube / TikTok / YouTube Music */}
-            <div className="rounded-2xl border border-zinc-800 bg-[#101014] p-5 space-y-4 shadow-xl">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="h-8 w-8 rounded-lg bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400">
-                    <Music className="h-4 w-4" />
-                  </div>
-                  <div>
-                    <h3 className="text-xs font-mono font-bold text-white uppercase tracking-wider">
-                      Fetch Audio dari Link (YouTube, TikTok, YT Music)
-                    </h3>
-                    <p className="text-[11px] text-zinc-400">
-                      Tempel link video/lagu, sistem otomatis mengambil thumbnail, judul, durasi & audio stream.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="hidden sm:flex items-center gap-2">
-                  <span className="text-[10px] font-mono text-red-400 border border-red-500/30 bg-red-500/10 px-2 py-0.5 rounded">
-                    YouTube
-                  </span>
-                  <span className="text-[10px] font-mono text-cyan-400 border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 rounded">
-                    TikTok
-                  </span>
-                  <span className="text-[10px] font-mono text-purple-400 border border-purple-500/30 bg-purple-500/10 px-2 py-0.5 rounded">
-                    YT Music
-                  </span>
-                </div>
-              </div>
-
-              <form onSubmit={handleFetchMediaUrl} className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                <div className="relative flex-1">
-                  <input
-                    type="url"
-                    value={urlInput}
-                    onChange={(e) => setUrlInput(e.target.value)}
-                    placeholder="https://www.youtube.com/watch?v=... atau https://vt.tiktok.com/..."
-                    className="w-full rounded-xl border border-zinc-700 bg-black px-4 py-2.5 text-xs text-white placeholder-zinc-600 focus:border-white focus:outline-none font-mono"
-                  />
-                  {urlInput && (
-                    <button
-                      type="button"
-                      onClick={() => setUrlInput('')}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white text-xs"
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isFetchingUrl || !urlInput.trim()}
-                  className="rounded-xl bg-blue-600 hover:bg-blue-500 px-5 py-2.5 text-xs font-mono font-bold text-white transition-all shadow-md active:scale-95 disabled:opacity-40 flex items-center justify-center gap-2 shrink-0"
-                >
-                  {isFetchingUrl ? (
-                    <>
-                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                      <span>Mengambil Audio...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="h-3.5 w-3.5" />
-                      <span>Fetch Audio</span>
-                    </>
-                  )}
-                </button>
-              </form>
-
-              {fetchError && (
-                <div className="flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400 font-mono">
-                  <AlertCircle className="h-4 w-4 shrink-0" />
-                  <span>{fetchError}</span>
-                </div>
-              )}
-
-              {/* Fetched Media Result Card */}
-              {fetchedMedia && (
-                <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 animate-fade-in">
-                  <div className="flex items-center gap-3 min-w-0">
-                    {fetchedMedia.thumbnail && (
-                      <div className="relative h-16 w-24 rounded-lg overflow-hidden border border-zinc-800 bg-black shrink-0">
-                        <img
-                          src={fetchedMedia.thumbnail}
-                          alt={fetchedMedia.title}
-                          className="h-full w-full object-cover"
-                        />
-                        <span className="absolute bottom-1 right-1 rounded bg-black/80 px-1 py-0.2 text-[9px] font-mono font-bold text-white">
-                          {formatDuration(fetchedMedia.duration)}
-                        </span>
-                      </div>
-                    )}
-
-                    <div className="min-w-0 space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className={`text-[10px] font-mono px-2 py-0.2 rounded font-bold uppercase ${
-                          fetchedMedia.platform === 'tiktok'
-                            ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
-                            : fetchedMedia.platform === 'youtube_music'
-                            ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
-                            : 'bg-red-500/20 text-red-400 border border-red-500/30'
-                        }`}>
-                          {fetchedMedia.platform === 'tiktok' ? 'TikTok' : fetchedMedia.platform === 'youtube_music' ? 'YouTube Music' : 'YouTube'}
-                        </span>
-                        <span className="text-[11px] font-mono text-zinc-400 truncate">
-                          {fetchedMedia.author}
-                        </span>
-                      </div>
-                      <h4 className="text-xs font-bold text-white truncate max-w-md font-mono">
-                        {fetchedMedia.title}
-                      </h4>
-                      <p className="text-[10px] font-mono text-emerald-400">
-                        ✓ Audio Stream Siap Dimainkan & Di-upload
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 w-full md:w-auto shrink-0">
-                    <button
-                      type="button"
-                      onClick={togglePlayFetchedPreview}
-                      className="flex-1 md:flex-none flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 hover:border-zinc-500 px-3.5 py-2 text-xs font-mono text-zinc-200 transition-colors"
-                    >
-                      {isPlayingFetched ? (
-                        <>
-                          <Pause className="h-3.5 w-3.5 text-blue-400" />
-                          <span>Pause</span>
-                        </>
-                      ) : (
-                        <>
-                          <Play className="h-3.5 w-3.5 text-blue-400" />
-                          <span>Preview Audio</span>
-                        </>
-                      )}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={handleAddFetchedToQueue}
-                      disabled={isAddingFetched || (!dailyQuota.unlimited && dailyQuota.remaining <= 0) || audioQueue.length >= 10}
-                      className="flex-1 md:flex-none flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-xs font-mono font-bold text-white transition-all shadow-md active:scale-95 disabled:opacity-40"
-                    >
-                      {isAddingFetched ? (
-                        <>
-                          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                          <span>Memasukkan...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Upload className="h-3.5 w-3.5" />
-                          <span>+ Tambah ke Antrean</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
             {/* Audio Queue Management */}
             {audioQueue.length > 0 && (
               <div className="space-y-4">
@@ -1554,7 +1178,7 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => handleStartBulkUpload('audio')}
-                      disabled={isUploading || !robloxSession || !discordUser || (!dailyQuota.unlimited && dailyQuota.remaining <= 0 && !audioQueue.some((item) => item.status === 'error' && item.operationId))}
+                      disabled={isUploading || !robloxSession || !discordUser || !hasConfirmedRights || (!dailyQuota.unlimited && dailyQuota.remaining <= 0 && !audioQueue.some((item) => item.status === 'error' && item.operationId))}
                       className="flex items-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-500 px-4 py-2 text-xs font-mono font-bold text-white transition-all shadow-md active:scale-95 disabled:opacity-50"
                     >
                       <Upload className={`h-3.5 w-3.5 ${isUploading ? 'animate-bounce' : ''}`} />
@@ -1744,7 +1368,7 @@ export const DevToolsSection: React.FC<DevToolsSectionProps> = ({
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => handleStartBulkUpload('image')}
-                      disabled={isUploading || !robloxSession || !discordUser || (!dailyQuota.unlimited && dailyQuota.remaining <= 0 && !imageQueue.some((item) => item.status === 'error' && item.operationId))}
+                      disabled={isUploading || !robloxSession || !discordUser || !hasConfirmedRights || (!dailyQuota.unlimited && dailyQuota.remaining <= 0 && !imageQueue.some((item) => item.status === 'error' && item.operationId))}
                       className="flex items-center gap-2 rounded-lg bg-purple-600 hover:bg-purple-500 px-4 py-2 text-xs font-mono font-bold text-white transition-all shadow-md active:scale-95 disabled:opacity-50"
                     >
                       <Upload className={`h-3.5 w-3.5 ${isUploading ? 'animate-bounce' : ''}`} />

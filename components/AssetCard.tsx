@@ -68,7 +68,14 @@ export const AssetCard: React.FC<AssetCardProps> = ({
           <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/30 pointer-events-none" />
 
           {/* Top Badges */}
-          <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5">
+          <div className="absolute top-2.5 left-2.5 flex flex-wrap items-center gap-1.5">
+            <span className={`rounded px-2 py-0.5 text-[10px] font-mono font-bold uppercase ${
+              asset.isPremium
+                ? 'border border-amber-400/40 bg-amber-400/15 text-amber-200'
+                : 'border border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
+            }`}>
+              {asset.isPremium ? 'Premium' : 'Free'}
+            </span>
             <span className="rounded bg-black/80 backdrop-blur-md px-2 py-0.5 text-[10px] font-mono font-bold tracking-wider text-white border border-white/10 uppercase">
               {asset.format}
             </span>

@@ -21,7 +21,8 @@ export default function Home() {
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [bookmarkedIds, setBookmarkedIds] = useState<string[]>([]);
   const [isBookmarksOpen, setIsBookmarksOpen] = useState(false);
-  const [activeSection, setActiveSection] = useState('assets');
+  const [activeSection, setActiveSection] = useState<'assets' | 'tools'>('assets');
+  const [selectedTier, setSelectedTier] = useState<'all' | 'free' | 'premium'>('all');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Global Real-time Counters (All Users & Visitors)
@@ -221,7 +222,8 @@ export default function Home() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
-        searchInputRef.current?.focus();
+        setActiveSection('assets');
+        window.setTimeout(() => searchInputRef.current?.focus(), 0);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -341,6 +343,12 @@ export default function Home() {
   const filteredAssets = useMemo(() => {
     let result = [...assetsList];
 
+    if (selectedTier === 'free') {
+      result = result.filter((asset) => !asset.isPremium);
+    } else if (selectedTier === 'premium') {
+      result = result.filter((asset) => asset.isPremium);
+    }
+
     if (selectedCategory !== 'all') {
       result = result.filter((a) => a.category === selectedCategory);
     }
@@ -366,7 +374,7 @@ export default function Home() {
     }
 
     return result;
-  }, [searchQuery, selectedCategory, sortBy, assetsList]);
+  }, [searchQuery, selectedCategory, selectedTier, sortBy, assetsList]);
 
   const bookmarkedAssets = useMemo(() => {
     return assetsList.filter((a) => bookmarkedIds.includes(a.id));
@@ -411,7 +419,10 @@ export default function Home() {
         bookmarksCount={bookmarkedIds.length}
         activeSection={activeSection}
         setActiveSection={setActiveSection}
-        onSearchFocus={() => searchInputRef.current?.focus()}
+        onSearchFocus={() => {
+          setActiveSection('assets');
+          window.setTimeout(() => searchInputRef.current?.focus(), 0);
+        }}
         discordUser={discordUser}
         onOpenDiscordAuth={() => setIsDiscordModalOpen(true)}
         onLogoutDiscord={() => {
@@ -424,50 +435,83 @@ export default function Home() {
         }}
       />
 
-      {/* Hero Header & Search */}
-      <Hero
-        searchQuery={searchQuery}
-        setSearchQuery={setSearchQuery}
-        selectedCategory={selectedCategory}
-        setSelectedCategory={setSelectedCategory}
-        searchInputRef={searchInputRef}
-        totalAssets={assetsList.length}
-        totalDownloads={totalDownloads}
-        totalVisitors={totalVisitors}
-      />
+      <div
+        id="assets-panel"
+        role="tabpanel"
+        aria-label="Produk dan aset"
+        hidden={activeSection !== 'assets'}
+        className="flex-1"
+      >
+        <Hero
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          selectedCategory={selectedCategory}
+          setSelectedCategory={setSelectedCategory}
+          searchInputRef={searchInputRef}
+          totalAssets={assetsList.length}
+          totalDownloads={totalDownloads}
+          totalVisitors={totalVisitors}
+        />
 
-      {/* Asset Catalog Section */}
-      <section id="assets" className="flex-1 py-12 border-b border-border">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        {/* Asset Catalog Section */}
+        <section className="py-12 border-b border-border">
+          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           
           {/* Catalog Controls Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
             <div>
               <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight uppercase">
-                {selectedCategory === 'all' ? '                All Developer Assets' : `${selectedCategory.replace(/-/g, ' ').toUpperCase()} Assets`}
+                {selectedCategory === 'all' ? 'Produk & Aset Roblox' : `${selectedCategory.replace(/-/g, ' ').toUpperCase()} Assets`}
               </h2>
               <p className="text-xs text-zinc-400 mt-1">
-                Showing {filteredAssets.length} verified community resources ready for Roblox Studio.
+                {filteredAssets.length} produk tersedia untuk Roblox Studio.
               </p>
             </div>
 
-            {/* Sort Dropdown */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-mono text-zinc-500">Sort by:</span>
-              <div className="flex rounded-xl border border-border bg-surface p-1 text-xs">
-                {(['popular', 'downloads', 'newest'] as const).map((mode) => (
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <div role="group" aria-label="Filter jenis produk" className="flex rounded-xl border border-border bg-surface p-1 text-xs">
+                {([
+                  ['all', 'Semua'],
+                  ['free', 'Free'],
+                  ['premium', 'Premium'],
+                ] as const).map(([tier, label]) => (
                   <button
-                    key={mode}
-                    onClick={() => setSortBy(mode)}
-                    className={`rounded-lg px-3 py-1 font-mono uppercase text-[11px] transition-colors ${
-                      sortBy === mode
-                        ? 'bg-white text-black font-bold'
+                    key={tier}
+                    type="button"
+                    aria-pressed={selectedTier === tier}
+                    onClick={() => setSelectedTier(tier)}
+                    className={`rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors ${
+                      selectedTier === tier
+                        ? tier === 'premium'
+                          ? 'bg-amber-300 text-black font-bold'
+                          : 'bg-white text-black font-bold'
                         : 'text-zinc-400 hover:text-white'
                     }`}
                   >
-                    {mode}
+                    {label}
                   </button>
                 ))}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <SlidersHorizontal className="h-3.5 w-3.5 text-zinc-500" aria-hidden="true" />
+                <span className="text-xs font-mono text-zinc-500">Urutkan:</span>
+                <div className="flex rounded-xl border border-border bg-surface p-1 text-xs">
+                  {(['popular', 'downloads', 'newest'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setSortBy(mode)}
+                      className={`rounded-lg px-3 py-1 font-mono uppercase text-[11px] transition-colors ${
+                        sortBy === mode
+                          ? 'bg-white text-black font-bold'
+                          : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
@@ -497,6 +541,7 @@ export default function Home() {
                   onClick={() => {
                     setSearchQuery('');
                     setSelectedCategory('all');
+                    setSelectedTier('all');
                   }}
                   className="mt-4 rounded-lg bg-white px-4 py-2 text-xs font-bold text-black hover:bg-zinc-200"
                 >
@@ -520,14 +565,22 @@ export default function Home() {
             </div>
           )}
 
-        </div>
-      </section>
+          </div>
+        </section>
+      </div>
 
       {/* Interactive Developer Tools Section */}
-      <DevToolsSection 
-        discordUser={discordUser} 
-        onOpenDiscordAuth={() => setIsDiscordModalOpen(true)} 
-      />
+      <div
+        id="tools-panel"
+        role="tabpanel"
+        aria-label="Tools uploader"
+        hidden={activeSection !== 'tools'}
+      >
+        <DevToolsSection
+          discordUser={discordUser}
+          onOpenDiscordAuth={() => setIsDiscordModalOpen(true)}
+        />
+      </div>
 
       {/* Modals */}
       <AssetModal
@@ -559,7 +612,10 @@ export default function Home() {
       />
 
       {/* Footer */}
-      <Footer />
+      <Footer onNavigateSection={(section) => {
+        setActiveSection(section);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }} />
     </div>
   );
 }

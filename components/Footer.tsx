@@ -1,9 +1,13 @@
 'use client';
 
 import React from 'react';
-import { Box, Terminal } from 'lucide-react';
+import { Terminal } from 'lucide-react';
 
-export const Footer: React.FC = () => {
+interface FooterProps {
+  onNavigateSection: (section: 'assets' | 'tools') => void;
+}
+
+export const Footer: React.FC<FooterProps> = ({ onNavigateSection }) => {
   return (
     <footer className="border-t border-border bg-background pt-12 pb-8 text-xs text-zinc-400">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
@@ -32,11 +36,12 @@ export const Footer: React.FC = () => {
               Developer Modules
             </h4>
             <ul className="space-y-2 text-xs">
-              <li><a href="#assets" className="hover:text-white transition-colors">Free 3D Prop Library</a></li>
-              <li><a href="#assets" className="hover:text-white transition-colors">4K PBR Surface Manager</a></li>
-              <li><a href="#tools" className="hover:text-white transition-colors">Luau Color3 Converter</a></li>
-              <li><a href="#tools" className="hover:text-white transition-colors">Studs Scale Calculator</a></li>
-              <li><a href="#tools" className="hover:text-white transition-colors">Atmosphere & Fog Studio</a></li>
+              <li><button type="button" onClick={() => onNavigateSection('assets')} className="hover:text-white transition-colors">Free 3D Prop Library</button></li>
+              <li><button type="button" onClick={() => onNavigateSection('assets')} className="hover:text-white transition-colors">4K PBR Surface Manager</button></li>
+              <li><button type="button" onClick={() => onNavigateSection('tools')} className="hover:text-white transition-colors">Luau Color3 Converter</button></li>
+              <li><button type="button" onClick={() => onNavigateSection('tools')} className="hover:text-white transition-colors">Studs Scale Calculator</button></li>
+              <li><button type="button" onClick={() => onNavigateSection('tools')} className="hover:text-white transition-colors">Atmosphere & Fog Studio</button></li>
+              <li><a href="/admin-panel" className="hover:text-white transition-colors">Admin Panel</a></li>
             </ul>
           </div>
 

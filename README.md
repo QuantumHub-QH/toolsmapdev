@@ -13,6 +13,7 @@ An ultra-modern, high-performance developer hub and free resource suite for Robl
 ## ✨ Features
 
 ### 1. 📦 Free Asset & Map Resource Library
+- **Separate Products Tab**: Filter the catalog into Free and Premium assets without scrolling past the upload tools.
 - **3D Models & Props**: Modular street lamps, low-poly nature & pine tree packs, city props, warehouse kits.
 - **4K PBR Materials & Textures**: Seamless wet asphalt, grunge concrete, tileable terrain maps with Color, Normal, and Roughness maps.
 - **Atmosphere & Lighting Presets**: Cyberpunk Noir, Golden Hour, Clean Studio Noon, Silent Hill Horror Mist.
@@ -22,23 +23,40 @@ An ultra-modern, high-performance developer hub and free resource suite for Robl
 - **Instant Actions**: 1-Click Roblox Asset ID Copy (`rbxassetid://`), direct source download, Luau script preview, and local bookmarks.
 
 ### 2. 🧰 Interactive Developer Tools
+- **Roblox Audio & Image Uploaders**: Batch upload up to 10 files to each user's own Roblox account with Discord-based daily quotas.
+- **Audio Adjustments**: Preview and process user-provided audio with speed and volume controls. Upload only files you own or are authorized to use.
+- **Session-Only API Keys**: Each uploader uses the user's own scoped Roblox Open Cloud key; the browser does not persist the key after the tab is closed.
 - **🎨 Luau Color3 Converter**: Visual color picker generating `Color3.fromRGB(...)`, `Color3.fromHex(...)`, `Color3.new(...)`, and CSS hex with instant copy.
 - **📏 Studs to Real-World Scale Calculator**: Precision converter between Roblox Studs, Meters, Feet, and Centimeters (1 Stud = 0.28m, Character = 5 Studs = 1.4m).
 - **☀️ Lighting & Atmosphere Studio**: Real-time sliders for ClockTime, Brightness, FogEnd, Bloom, and OutdoorAmbient with 1-click Luau script export for Roblox Studio Command Bar.
 - **⚡ Luau Mechanics Generator**: Interactive code generator for Doors, Hazard parts, Teleporters, and Server Leaderstats.
 - **🔊 Roblox Asset ID Resolver & Audio Tester**: Convert raw Asset IDs into Studio format, catalog URLs, and CDN endpoints.
 
-### 3. 🌐 Backend REST API Endpoints
+### 3. 🛡️ Discord Access & Admin Panel
+- **Discord Authorization**: Signed server-side sessions gate the product catalog and upload quota.
+- **Free & Premium Access**: Premium-only product downloads and server-verified upload entitlements.
+- **Admin Panel**: Manage Free/Premium products and grant or revoke Premium access for Discord users.
+
+### 4. 🌐 Backend REST API Endpoints
 - `GET /api/assets`: Search, category filtering, and tag queries.
 - `POST /api/assets`: Submit community assets and resources.
 - `GET /api/tools`: Retrieve dev tools, lighting presets, and code snippets.
 - `GET /api/stats`: Live statistics on assets, downloads, and community metrics.
 
-### 4. 📱 Responsive Dark-Themed GUI
+### 5. 📱 Responsive Dark-Themed GUI
 - Pitch-black cyber aesthetic (`#08080a`, `#101014`, crisp pure white text, subtle glowing borders).
 - Mobile navigation drawer and touch-friendly controls.
+- Separate Products and Uploader tabs, with Audio and Image sub-tabs to keep mobile navigation short.
 - Keyboard shortcuts (`Ctrl + K` / `⌘K` for instant search, `ESC` for modal dismiss).
 - Local storage bookmarks system.
+
+---
+
+## 🔐 Roblox Upload Key Handling
+
+Each user enters their own Roblox Open Cloud API key and creator ID. The key is held in page memory and sent over HTTPS to the server only when calling Roblox; it is not saved in browser storage by this app. Use a key scoped to the intended creator and the minimum Assets permissions. Disconnecting or closing the tab clears the in-memory key. Roblox's own moderation, file restrictions, and upload quotas still apply.
+
+Audio and image uploads require a confirmation that the user owns the content or has permission to upload it. The uploader accepts local files; it does not download audio from third-party media links.
 
 ---
 
