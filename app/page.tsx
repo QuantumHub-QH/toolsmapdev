@@ -26,8 +26,8 @@ export default function Home() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Global Real-time Counters (All Users & Visitors)
-  const [totalVisitors, setTotalVisitors] = useState<number>(142);
-  const [globalDownloads, setGlobalDownloads] = useState<number>(36);
+  const [totalVisitors, setTotalVisitors] = useState<number>(0);
+  const [globalDownloads, setGlobalDownloads] = useState<number>(0);
 
   // Discord Authorization State
   const [discordUser, setDiscordUser] = useState<DiscordUser | null>(null);
@@ -124,8 +124,8 @@ export default function Home() {
         if (res.ok) {
           const json = await res.json();
           if (json.success && json.data) {
-            if (json.data.totalVisitors) setTotalVisitors(json.data.totalVisitors);
-            if (json.data.totalDownloads) setGlobalDownloads(json.data.totalDownloads);
+            if (typeof json.data.totalVisitors === 'number') setTotalVisitors(json.data.totalVisitors);
+            if (typeof json.data.totalDownloads === 'number') setGlobalDownloads(json.data.totalDownloads);
           }
         }
       } catch (e) {}

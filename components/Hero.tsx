@@ -33,7 +33,7 @@ export const Hero: React.FC<HeroProps> = ({
   searchInputRef,
   totalAssets,
   totalDownloads,
-  totalVisitors = 142,
+  totalVisitors = 0,
 }) => {
   return (
     <section className="relative overflow-hidden border-b border-border bg-background pt-12 pb-10">

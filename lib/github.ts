@@ -213,8 +213,10 @@ export async function fetchStatsFromGitHub(): Promise<GlobalStats> {
           return parsed;
         }
       }
+      throw new Error(`GitHub stats fetch failed with HTTP ${res.status}.`);
     } catch (e) {
-      console.warn('Direct GitHub API stats fetch warning:', e);
+      console.warn('Direct GitHub API stats fetch failed:', e);
+      throw e;
     }
   }
 
@@ -232,8 +234,8 @@ export async function fetchStatsFromGitHub(): Promise<GlobalStats> {
   } catch (e) {}
 
   return {
-    totalVisitors: 142,
-    totalDownloads: 36,
+    totalVisitors: 0,
+    totalDownloads: 0,
     downloads: {},
     updatedAt: new Date().toISOString(),
   };

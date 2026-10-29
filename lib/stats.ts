@@ -14,7 +14,15 @@ export async function getLiveStats(): Promise<GlobalStats> {
     return cachedStats;
   }
 
-  // 1. Try local file
+  // GitHub is the canonical store in production; the bundled file may be stale.
+  if (process.env.GITHUB_TOKEN?.trim()) {
+    const ghStats = await fetchStatsFromGitHub();
+    cachedStats = ghStats;
+    lastSyncTime = Date.now();
+    return ghStats;
+  }
+
+  // Use the bundled file when GitHub is not configured.
   try {
     if (fs.existsSync(STATS_FILE_PATH)) {
       const content = fs.readFileSync(STATS_FILE_PATH, 'utf-8');
@@ -27,7 +35,7 @@ export async function getLiveStats(): Promise<GlobalStats> {
     }
   } catch (e) {}
 
-  // 2. Try GitHub API
+  // Try GitHub when no token is configured (for public repositories).
   try {
     const ghStats = await fetchStatsFromGitHub();
     if (ghStats && typeof ghStats.totalVisitors === 'number') {
@@ -38,8 +46,8 @@ export async function getLiveStats(): Promise<GlobalStats> {
   } catch (e) {}
 
   return {
-    totalVisitors: 142,
-    totalDownloads: 36,
+    totalVisitors: 0,
+    totalDownloads: 0,
     downloads: {},
     updatedAt: new Date().toISOString(),
   };
