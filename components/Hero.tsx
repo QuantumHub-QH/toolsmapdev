@@ -9,7 +9,7 @@ interface HeroProps {
   setSearchQuery: (query: string) => void;
   selectedCategory: AssetCategory;
   setSelectedCategory: (cat: AssetCategory) => void;
-  searchInputRef: React.RefObject<HTMLInputElement>;
+  searchInputRef: React.RefObject<HTMLInputElement | null>;
   totalAssets: number;
   totalDownloads: number;
   totalVisitors?: number;

@@ -2,11 +2,11 @@
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new)
 ![License: MIT](https://img.shields.io/badge/License-MIT-white.svg)
-![Next.js](https://img.shields.io/badge/Next.js-14_App_Router-black?logo=next.js)
+![Next.js](https://img.shields.io/badge/Next.js-16_App_Router-black?logo=next.js)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind-3.4-black?logo=tailwindcss)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue?logo=typescript)
 
-An ultra-modern, high-performance developer hub and free resource suite for Roblox Studio builders, map designers, and level artists. Built with a sleek black & white cyber/dev aesthetic, fully responsive across Mobile & PC, with built-in REST API backend endpoints and zero-config deployment on Vercel.
+An ultra-modern, high-performance developer hub and free resource suite for Roblox Studio builders, map designers, and level artists. Built with a sleek black & white cyber/dev aesthetic, fully responsive across Mobile & PC, with built-in REST API backend endpoints and deployment support for Cloudflare Workers and Vercel.
 
 ---
 
@@ -63,11 +63,11 @@ Audio and image uploads require a confirmation that the user owns the content or
 ## 🚀 Quick Start (Local Development)
 
 ```bash
-# Clone the repository
-git clone https://github.com/QuantumHub-QH/mchlern.git
+# Clone the application repository
+git clone https://github.com/QuantumHub-QH/toolsmapdev.git
 
 # Enter the project directory
-cd mchlern
+cd toolsmapdev
 
 # Install dependencies
 npm install
@@ -80,20 +80,42 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ---
 
+## ☁️ Deploy to Cloudflare Workers
+
+This Next.js app uses the OpenNext Cloudflare adapter. In Cloudflare Workers & Pages, connect the `QuantumHub-QH/toolsmapdev` repository and use:
+
+- **Build command:** `npx opennextjs-cloudflare build`
+- **Deploy command:** `npx wrangler deploy`
+- **Preview command:** `npx opennextjs-cloudflare preview`
+- Leave **Protect with Cloudflare Access** off for a public website.
+
+Add these server-side values in the Worker's **Settings → Variables and Secrets** before relying on app features. Never commit their values:
+
+- `GITHUB_TOKEN` — least-privilege token with access to `QuantumHub-QH/mchlern`, where catalog, Premium, and upload-limit data are currently stored.
+- `ADMIN_PASSWORD` — strong admin password and signing secret for sessions.
+- `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, and `DISCORD_REDIRECT_URI`.
+- `NEXT_PUBLIC_FIREBASE_API_KEY` and `NEXT_PUBLIC_FIREBASE_PROJECT_ID` if the Firebase fallback is used; add the other `NEXT_PUBLIC_FIREBASE_*` settings when applicable.
+
+Set `DISCORD_REDIRECT_URI` to `https://<worker-domain>/api/auth/discord/callback` and register that exact callback in the Discord Developer Portal. Update it again if you later switch to a custom domain. The website repository (`toolsmapdev`) and the data repository (`mchlern`) are separate; the GitHub token must have access to the latter.
+
+The local Cloudflare runtime can be checked with `npm run preview`. OpenNext currently warns that Windows support is not guaranteed; if local Workers preview fails on Windows, use WSL or Cloudflare's Linux-based GitHub deployment.
+
+---
+
 ## 🔒 Discord-Gated Product Catalog
 
 The public website requires a verified Discord login before showing the product catalog. Product API requests, favorites, and download-stat updates also require the server-signed HTTP-only Discord session cookie; product data is not embedded in the homepage bundle or browser storage. Products marked **Premium** show **ADD PREMIUM** to users without an active entitlement; active Premium users receive the normal download, asset-ID, and script actions. The **BUY PREMIUM** menu lists the manual Discord-contact plans: Rp10.000/week, Rp30.000/month, Rp50.000/3 months, and Rp100.000/8 months.
 
 To prevent direct access to the catalog outside the website:
 
-1. Change the GitHub repository `QuantumHub-QH/mchlern` to **Private** in GitHub Settings → General → Danger Zone. The Vercel Git integration must retain access to this private repo.
-2. Keep `GITHUB_TOKEN` configured in Vercel, with private-repository **Contents: Read and write** permission. The server uses the authenticated GitHub API to load and publish `data/products.json`, `data/premium-users.json`, and `data/limits.json`; unauthenticated raw GitHub fallback is disabled. Premium entitlements and upload limits are stored in the private repository. The catalog API only includes Premium IDs, scripts, file data, and download links for users whose server-verified Discord entitlement has not expired.
+1. Change the data repository `QuantumHub-QH/mchlern` to **Private** in GitHub Settings → General → Danger Zone. The Cloudflare Worker must retain access through its `GITHUB_TOKEN` secret.
+2. Keep `GITHUB_TOKEN` configured as a server-side secret, with private-repository **Contents: Read and write** permission. The server uses the authenticated GitHub API to load and publish `data/products.json`, `data/premium-users.json`, and `data/limits.json`; unauthenticated raw GitHub fallback is disabled. Premium entitlements and upload limits are stored in the private repository. The catalog API only includes Premium IDs, scripts, file data, and download links for users whose server-verified Discord entitlement has not expired.
 3. Keep `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, and `DISCORD_REDIRECT_URI` configured; register the exact callback URL (`https://your-domain/api/auth/discord/callback`) in Discord Developer Portal. The client secret signs the Discord session cookie.
 4. Publish [`firestore.rules`](./firestore.rules) to Cloud Firestore if Firebase is used, so browser clients cannot read the fallback `products` collection directly.
-5. Keep a strong `ADMIN_PASSWORD` configured in Vercel. Set all variables for the target environment and redeploy after changing them.
+5. Keep a strong `ADMIN_PASSWORD` configured as a server-side secret. Set all variables for the target environment and redeploy after changing them.
 6. In Admin Panel → **Kelola User Premium**, enter the buyer's Discord user ID and choose a duration from one week through one year. Re-adding an active user extends from their current expiry; deleting the user revokes Premium immediately. Expired users automatically lose Premium features. Premium accounts have unlimited daily audio/image uploads; free accounts retain the server-enforced limit of 10 successful uploads per day.
 
-The repository is separate from the website's public availability: making the repo private should not make the deployed Vercel site private, provided Vercel retains repository access.
+The data repository is separate from the website's public availability: making `mchlern` private does not make the deployed site private, provided the Worker has a valid `GITHUB_TOKEN`.
 
 **Previously public data cannot be made secret retroactively.** Making the repository private blocks future anonymous access to its current GitHub pages, but does not erase copies, forks, downloads, caches, screenshots, or old data already obtained by others. Rotate any exposed Roblox IDs/files where possible. Any user who can view/download a product after logging in can still copy or redistribute it; this gate prevents anonymous direct access, not redistribution by authorized visitors.
 
@@ -125,9 +147,9 @@ git push -u origin main
 
 ---
 
-## ⚡ Deploy ke Vercel (1-Click)
+## ⚡ Deploy ke Vercel
 
-Web ini dibuat dengan **Next.js 14 App Router** sehingga **100% Zero-Config** saat dideploy ke Vercel:
+This project also supports deployment to Vercel:
 
 1. Buka [vercel.com](https://vercel.com) dan login dengan akun GitHub kamu.
 2. Klik tombol **"Add New..."** -> **"Project"**.
